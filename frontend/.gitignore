@@ -28,3 +28,9 @@ coverage
 *.sw?
 
 *.tsbuildinfo
+
+# Sensitive files
+backend/temporary_note.md
+**/stream_output.py
+**/*api_key*
+**/*.env
