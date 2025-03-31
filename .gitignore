@@ -1,0 +1,34 @@
+# IDE文件
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# 敏感文件
+backend/temporary_note.md
+**/stream_output.py
+**/*api_key*
+**/*.env
+
+# 前端依赖
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 前端打包输出
+dist/
+dist-ssr/
+
+# Python相关
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/ 
