@@ -1,29 +1,47 @@
-# IDE文件
+# IDE files
 .idea/
-.vscode/
+.vscode/*
+!.vscode/extensions.json
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+*.tsbuildinfo
 
-# 敏感文件
-backend/temporary_note.md
+# Other files
 **/stream_output.py
+# all temporary md files in backend
+backend/*.md    
 **/*api_key*
 **/*.env
 
-# 前端依赖
+# frontend related
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# frontend dependencies
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# 前端打包输出
+# frontend build output
 dist/
 dist-ssr/
+coverage/
+*.local
 
-# Python相关
+/cypress/videos/
+/cypress/screenshots/
+
+# Python related
 __pycache__/
 *.py[cod]
 *$py.class
@@ -31,4 +49,4 @@ __pycache__/
 .Python
 env/
 venv/
-ENV/ 
+ENV/
