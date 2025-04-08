@@ -66,8 +66,16 @@ class UserService:
         # 创建新用户
         user = User.create_user(username, password)
         
-        # 保存到数据库
-        result = await self.mongo.create_user(user.dict())
+        # 保存到数据库 - 确保包含所有必要字段
+        user_dict = {
+            "id": user.id,
+            "username": user.username,
+            "password_hash": user.password_hash,  # 确保保存密码哈希
+            "salt": user.salt,                    # 确保保存盐值
+            "avatar_url": user.avatar_url
+        }
+        
+        result = await self.mongo.create_user(user_dict)
         if not result:
             return False, None, "创建用户失败"
             
@@ -156,10 +164,6 @@ class UserService:
             await self.redis.sadd(USER_ONLINE_SET_KEY, user_id)
         elif status == USER_STATUS_OFFLINE:
             await self.redis.srem(USER_ONLINE_SET_KEY, user_id)
-        
-        # 如果MongoDB可用，更新数据库
-        if self.mongo is not None and self.mongo._db is not None:
-            await self.mongo.update_user(user_id, {"status": status})
 
     async def set_user_online(self, user_id: str) -> None:
         """设置用户为在线状态"""
@@ -207,7 +211,3 @@ class UserService:
             await self.redis.delete(f"user:current_room:{user_id}")
             # 更新用户状态为在线
             await self.set_user_online(user_id)
-            
-        # 如果MongoDB可用，更新数据库
-        if self.mongo is not None and self.mongo._db is not None:
-            await self.mongo.update_user(user_id, {"current_room_id": room_id})

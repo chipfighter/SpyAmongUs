@@ -7,7 +7,6 @@ import uuid
 import hashlib
 import secrets
 import string
-from config import USER_STATUS_OFFLINE, USER_STATUS_ONLINE
 
 
 class User(BaseModel):
@@ -16,8 +15,6 @@ class User(BaseModel):
     password_hash: Optional[str] = None     # 密码哈希（存储）
     salt: Optional[str] = None              # 密码盐值
     avatar_url: Optional[str] = None        # 头像URL
-    current_room_id: Optional[str] = None   # 当前所在房间ID
-    status: str = USER_STATUS_OFFLINE       # 用户状态（默认离线）
 
     # 不返回敏感字段
     class Config:
@@ -25,9 +22,7 @@ class User(BaseModel):
             "example": {
                 "id": "user-1",
                 "username": "测试用户",
-                "avatar_url": None,
-                "current_room_id": None,
-                "status": USER_STATUS_OFFLINE
+                "avatar_url": None
             }
         }
         
@@ -43,8 +38,7 @@ class User(BaseModel):
         """创建临时用户"""
         return cls(
             id=user_id,
-            username=username,
-            status=USER_STATUS_ONLINE  # 创建时设为在线
+            username=username
         )
 
     @staticmethod
@@ -73,8 +67,7 @@ class User(BaseModel):
             id=user_id,
             username=username,
             password_hash=password_hash,
-            salt=salt,
-            status=USER_STATUS_OFFLINE  # 创建后默认为离线状态
+            salt=salt
         )
 
     def verify_password(self, password: str) -> bool:

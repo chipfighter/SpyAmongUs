@@ -1,5 +1,5 @@
 """
-核心文件：多人聊天系统v0.0.1
+核心文件：多人聊天系统v0.0.3
 """
 
 import uvicorn
@@ -41,10 +41,6 @@ class ConnectionManager:
     async def send_json(self, user_id: str, message: dict):
         if user_id in self.active_connections:
             await self.active_connections[user_id].send_json(message)
-    
-    async def send_text(self, user_id: str, message: str):
-        if user_id in self.active_connections:
-            await self.active_connections[user_id].send_text(message)
             
     def disconnect_all(self):
         """断开所有连接"""
@@ -114,7 +110,7 @@ async def shutdown_event():
     if room_service:
         await room_service.stop_background_tasks()
     
-    # 关闭连接
+    # 关闭redis、mongodb、所有websocket连接
     await redis_client.disconnect()
     await mongo_client.disconnect()
     connection_manager.disconnect_all()
@@ -233,7 +229,7 @@ async def websocket_endpoint(websocket: WebSocket):
             "user_id": user_id
         })
         
-        # 如果Redis未连接，先尝试连接
+        # 如果Redis未连接，先尝试连接（这部分主要给前端测试看的，之后stable version可以删掉）
         if redis_client._redis is None:
             logger.info("Redis未连接，尝试连接...")
             try:
@@ -279,6 +275,7 @@ async def websocket_endpoint(websocket: WebSocket):
             
                 # 处理不同类型的消息
                 if message_type == "create_room":
+                    # 1.创建房间
                     try:
                         # 验证必须字段
                         if 'room_name' not in data:
@@ -353,7 +350,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         })
             
                 elif message_type == "join_room":
-                    # 加入房间
+                    # 2.加入房间
                     room_id = data["data"].get("room_id")
                     invitation_code = data["data"].get("invitation_code")
                     username = data["data"]["username"]
@@ -361,7 +358,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     user_id_from_data = data["data"].get("user_id")
                     actual_user_id = user_id_from_data if user_id_from_data else user_id
                     
-                    # 缓存用户基本信息（仅在加入房间时）
+                    # 缓存用户基本信息（仅在加入房间时才缓存）
                     avatar = data["data"].get("avatar", "")
                     await redis_client.save_user_info(actual_user_id, {
                         "username": username,
@@ -454,7 +451,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         })
 
                 elif message_type == "message":
-                    # 发送消息
+                    # 3.发送消息
                     room_id = data["data"]["room_id"]
                     content = data["data"]["content"]
                     username = data["data"]["username"]
@@ -474,7 +471,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         })
 
                 elif message_type == "leave_room":
-                    # 离开房间
+                    # 4.离开房间
                     room_id = data["data"]["room_id"]
                     username = data["data"]["username"]
                     # 使用消息中提供的user_id，如果没有则使用路径参数中的user_id
@@ -512,7 +509,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         })
 
                 elif message_type == "get_public_rooms":
-                    # 获取公开房间列表
+                    # 5.获取公开房间列表
                     try:
                         public_rooms = await room_service.get_public_rooms()
 
@@ -623,3 +620,4 @@ async def read_root():
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, reload=DEBUG)
+

@@ -9,29 +9,26 @@
     </header>
 
     <main class="main-content">
+      <!-- 网络连接错误提示 -->
+      <div v-if="websocketError" class="network-error">
+        <h3>网络连接错误</h3>
+        <p>无法连接到游戏服务器，请检查以下可能的原因：</p>
+        <ul>
+          <li>网络连接问题</li>
+          <li>防火墙阻止了WebSocket连接</li>
+          <li>后端服务未正确启动或已停止运行</li>
+        </ul>
+        <button @click="tryReconnect" class="reconnect-button" :disabled="reconnecting">
+          {{ reconnecting ? '正在重连...' : '重试连接' }}
+        </button>
+      </div>
+
       <section class="rooms-section">
         <div class="section-header">
           <h2 class="section-title">房间列表</h2>
           <button class="refresh-btn" @click="fetchRooms" :disabled="loading">
             <span class="refresh-icon">🔄</span>
           </button>
-        </div>
-
-        <div v-if="websocketError" class="websocket-warning">
-          <span class="warning-icon">⚠️</span>
-          网络连接异常，可能原因：
-          <ul>
-            <li>防火墙阻止了WebSocket连接</li>
-            <li>后端服务未正确启动或配置</li>
-          </ul>
-          <div class="warning-actions">
-            <button @click="tryReconnect" class="reconnect-btn" :disabled="reconnecting">
-              {{ reconnecting ? '重连中...' : '尝试重新连接' }}
-            </button>
-            <button @click="switchToOfflineMode" class="offline-btn">
-              进入离线模式
-            </button>
-          </div>
         </div>
 
         <div class="rooms-container">
@@ -46,13 +43,11 @@
               :key="room.id" 
               class="room-card"
               @click="joinRoom(room.id)"
-              :class="{'offline-room': room.offline_mode}"
             >
               <h3 class="room-name">{{ room.name }}</h3>
               <div class="room-info">
                 <span class="user-count">{{ room.user_count || (room.users ? room.users.length : 0) }}人在线</span>
                 <span v-if="room.host_id === userStore.user?.id" class="host-badge">房主</span>
-                <span v-if="room.offline_mode" class="offline-badge">离线模式</span>
               </div>
             </div>
           </div>
@@ -75,7 +70,7 @@
               />
             </div>
             
-            <!-- 新增游戏参数设置 -->
+            <!-- 游戏设置部分 -->
             <div class="game-settings">
               <h3 class="settings-title">游戏设置</h3>
               
@@ -322,35 +317,17 @@ export default {
           // 通过WebSocket请求房间列表
           await roomStore.fetchPublicRooms()
           rooms.value = roomStore.getPublicRooms
-          // 检查是否有离线模式创建的房间
-          if (roomStore.currentRoom && roomStore.currentRoom.offline_mode) {
-            const offlineRoom = roomStore.currentRoom
-            // 如果离线房间不在列表中，添加它
-            if (!rooms.value.some(room => room.id === offlineRoom.id)) {
-              rooms.value = [...rooms.value, offlineRoom]
-            }
-          }
         } else {
-          // WebSocket未连接，检查是否有离线模式房间
-          if (roomStore.currentRoom && roomStore.currentRoom.offline_mode) {
-            rooms.value = [roomStore.currentRoom]
-          } else {
-            websocketError.value = true
-            error.value = '网络连接异常，无法获取房间列表。尝试创建一个离线房间。'
-          }
+          // WebSocket未连接
+          websocketError.value = true
+          error.value = '网络连接异常，无法获取房间列表。请检查网络连接或防火墙设置。'
           loading.value = false
         }
       } catch (err) {
         console.error('获取房间列表出错:', err)
         error.value = `无法连接到服务器: ${err.message}`
         loading.value = false
-        
-        // 检查是否有离线模式房间
-        if (roomStore.currentRoom && roomStore.currentRoom.offline_mode) {
-          rooms.value = [roomStore.currentRoom]
-        } else {
-          websocketError.value = true
-        }
+        websocketError.value = true
       }
     }
     
@@ -477,12 +454,6 @@ export default {
       }
     }
     
-    // 切换到离线模式
-    const switchToOfflineMode = () => {
-      console.log('切换到离线模式')
-      websocketError.value = false
-    }
-    
     return {
       userStore,
       newRoomName,
@@ -500,8 +471,7 @@ export default {
       handleLogout,
       websocketError,
       reconnecting,
-      tryReconnect,
-      switchToOfflineMode
+      tryReconnect
     }
   }
 }
@@ -567,6 +537,45 @@ export default {
   .main-content {
     grid-template-columns: 2fr 1fr;
   }
+}
+
+.network-error {
+  background-color: #f8d7da;
+  color: #721c24;
+  padding: 1.5rem;
+  margin: 1rem;
+  border-radius: 4px;
+  border-left: 4px solid #dc3545;
+  font-size: 0.9rem;
+  grid-column: 1 / -1;
+}
+
+.network-error h3 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+}
+
+.network-error ul {
+  margin: 0.5rem 0 1rem 1.5rem;
+  padding: 0;
+}
+
+.reconnect-button {
+  background-color: #007bff;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.reconnect-button:hover:not(:disabled) {
+  background-color: #0069d9;
+}
+
+.reconnect-button:disabled {
+  background-color: #adb5bd;
+  cursor: not-allowed;
 }
 
 .rooms-section, .join-create-section {
@@ -648,14 +657,6 @@ export default {
 
 .host-badge {
   background-color: #4CAF50;
-  color: white;
-  padding: 0.15rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.75rem;
-}
-
-.offline-badge {
-  background-color: #f44336;
   color: white;
   padding: 0.15rem 0.5rem;
   border-radius: 4px;
@@ -765,36 +766,5 @@ export default {
 .create-btn:disabled, .join-btn:disabled {
   background-color: #ccc;
   cursor: not-allowed;
-}
-
-.websocket-warning {
-  background-color: #ffebee;
-  color: #d32f2f;
-  padding: 0.75rem;
-  border-radius: 4px;
-  margin: 1rem 0;
-}
-
-.warning-icon {
-  margin-right: 0.5rem;
-}
-
-.warning-actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.reconnect-btn, .offline-btn {
-  background-color: transparent;
-  border: none;
-  cursor: pointer;
-  color: #4CAF50;
-  font-size: 1rem;
-  transition: color 0.2s;
-}
-
-.reconnect-btn:hover, .offline-btn:hover {
-  color: #45a049;
 }
 </style> 

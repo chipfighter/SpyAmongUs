@@ -10,6 +10,7 @@ export const userStore = reactive({
   loggedIn: false,
   error: null,
   loading: false,
+  connectionState: false,
 
   /**
    * 登录用户
@@ -18,70 +19,69 @@ export const userStore = reactive({
    * @returns {Promise<Object>} 登录结果
    */
   async loginWithPassword(username, password) {
-    this.error = null;
-    this.loading = true;
-    
     try {
-      // 构建登录请求
-      const loginUrl = `${API_BASE_URL}/api/login`;
+      this.loading = true
+      this.error = null
       
-      // 使用JSON格式发送请求
-      const response = await fetch(loginUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          username, 
-          password 
-        }),
-      });
-      
-      // 检查HTTP响应
-      if (!response.ok) {
-        if (response.status === 404) {
-          throw new Error('登录接口不存在，请检查后端服务');
-        } else if (response.status === 401) {
-          throw new Error('用户名或密码错误');
-        } else {
-          throw new Error(`服务器错误 (${response.status})`);
-        }
+      // 构建请求数据
+      const data = {
+        username: username,
+        password: password
       }
       
-      // 解析响应JSON
-      const data = await response.json();
+      // 发送请求
+      const response = await fetch(`${API_BASE_URL}/api/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+      })
       
-      // 处理API响应
-      if (data && data.user) {
-        // 登录成功
-        this.user = {
-          id: data.user.id,
-          username: data.user.username,
-          displayName: data.user.username
-        };
+      // 解析响应
+      const result = await response.json()
+      
+      // 检查登录是否成功
+      if (response.ok && result.success) {
+        // 提取用户信息
+        const userData = result.user
         
-        this.loggedIn = true;
+        // 添加默认头像，如果没有头像
+        if (!userData.avatar_url) {
+          userData.avatar = '/default_avatar.jpg' // 使用相对路径
+        } else {
+          userData.avatar = userData.avatar_url
+        }
         
-        // 保存到本地存储
-        this.saveToLocalStorage();
+        // 保存用户信息到状态
+        this.user = userData
+        this.loggedIn = true
+        
+        // 存储到本地存储
+        localStorage.setItem('user', JSON.stringify(userData))
+        localStorage.setItem('userId', userData.id)
+        localStorage.setItem('username', userData.username)
         
         // 连接WebSocket
         try {
-          await websocketService.connect(this.user.id);
+          await websocketService.connect(userData.id)
+          this.connectionState = true
         } catch (wsError) {
-          console.error('WebSocket连接失败:', wsError);
-          // 继续处理，允许用户即使没有WebSocket也能登录
+          console.error('WebSocket连接失败:', wsError)
+          this.connectionState = false
         }
         
-        return this.user;
+        return true
       } else {
-        throw new Error('服务器返回的用户数据无效');
+        this.error = result.message || '登录失败，请检查用户名和密码'
+        return false
       }
-    } catch (e) {
-      this.error = e.message;
-      return null;
+    } catch (error) {
+      this.error = `登录失败: ${error.message}`
+      console.error(this.error)
+      return false
     } finally {
-      this.loading = false;
+      this.loading = false
     }
   },
 
@@ -131,7 +131,8 @@ export const userStore = reactive({
         this.user = {
           id: data.user.id,
           username: data.user.username,
-          displayName: data.user.username
+          displayName: data.user.username,
+          avatar: data.user.avatar_url || '/default_avatar.jpg' // 确保设置默认头像
         };
         
         this.loggedIn = true;

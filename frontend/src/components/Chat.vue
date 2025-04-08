@@ -9,11 +9,39 @@
         暂无消息，快来聊天吧
       </div>
       
-      <div v-for="(message, index) in messages" :key="index" class="message" :class="{ 'self-message': message.userId === currentUserId }">
-        <div class="message-sender">{{ message.username || '系统' }}</div>
-        <div class="message-content">{{ message.content }}</div>
-        <div class="message-time">{{ formatTime(message.timestamp) }}</div>
-      </div>
+      <template v-for="(message, index) in messages" :key="index">
+        <!-- 系统消息 -->
+        <div v-if="message.type === 'system' || message.is_system" class="system-message">
+          <div class="system-content">{{ message.content }}</div>
+          <div class="message-time">{{ formatTime(message.timestamp) }}</div>
+        </div>
+        
+        <!-- 普通用户消息 -->
+        <div v-else class="message-wrapper" :class="{ 'self-message': isSelfMessage(message) }">
+          <!-- 左侧头像 (他人消息) -->
+          <div v-if="!isSelfMessage(message)" class="avatar">
+            <img :src="message.avatar || '/default_avatar.jpg'" alt="头像">
+          </div>
+          
+          <div class="message-bubble-container">
+            <!-- 用户名 -->
+            <div class="message-sender">{{ message.username }}</div>
+            
+            <!-- 消息气泡 -->
+            <div class="message-bubble">
+              {{ message.content }}
+            </div>
+            
+            <!-- 消息时间 -->
+            <div class="message-time">{{ formatTime(message.timestamp) }}</div>
+          </div>
+          
+          <!-- 右侧头像 (自己的消息) -->
+          <div v-if="isSelfMessage(message)" class="avatar">
+            <img :src="userStore.user?.avatar || '/default_avatar.jpg'" alt="头像">
+          </div>
+        </div>
+      </template>
     </div>
     
     <div class="chat-input">
@@ -59,6 +87,13 @@ export default {
     
     // 当前用户ID
     const currentUserId = computed(() => userStore.user?.id || '')
+    
+    // 判断是否是自己发送的消息
+    const isSelfMessage = (message) => {
+      return message.user_id === currentUserId.value || 
+             message.userId === currentUserId.value ||
+             message.is_self === true
+    }
     
     // 发送消息
     const sendMessage = () => {
@@ -109,6 +144,8 @@ export default {
       newMessage,
       messagesContainer,
       currentUserId,
+      userStore,
+      isSelfMessage,
       sendMessage,
       formatTime,
       scrollToBottom
@@ -121,7 +158,7 @@ export default {
 .chat-container {
   display: flex;
   flex-direction: column;
-  background-color: white;
+  background-color: #f5f5f5;
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.1);
   height: 100%;
@@ -148,7 +185,7 @@ export default {
   padding: 1rem;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 1rem;
   min-height: 300px;
   max-height: calc(100% - 120px);
 }
@@ -162,50 +199,110 @@ export default {
   font-style: italic;
 }
 
-.message {
-  max-width: 80%;
-  padding: 0.75rem;
-  border-radius: 8px;
-  background-color: #f1f1f1;
-  align-self: flex-start;
+/* 系统消息样式 */
+.system-message {
+  text-align: center;
+  margin: 0.5rem 0;
 }
 
+.system-content {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  background-color: rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+  font-size: 0.8rem;
+  color: #666;
+}
+
+/* 消息包装容器 */
+.message-wrapper {
+  display: flex;
+  margin-bottom: 0.5rem;
+  align-items: flex-start;
+}
+
+/* 自己的消息靠右 */
 .self-message {
-  background-color: #e8f5e9;
-  align-self: flex-end;
+  flex-direction: row-reverse;
 }
 
+/* 头像样式 */
+.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  overflow: hidden;
+  margin: 0 0.5rem;
+  flex-shrink: 0;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 消息气泡容器 */
+.message-bubble-container {
+  display: flex;
+  flex-direction: column;
+  max-width: 70%;
+}
+
+/* 用户名样式 */
 .message-sender {
-  font-weight: 500;
-  font-size: 0.9rem;
+  font-size: 0.8rem;
+  color: #555;
   margin-bottom: 0.25rem;
-  color: #444;
+  padding: 0 0.25rem;
 }
 
-.message-content {
-  word-break: break-word;
+.self-message .message-sender {
+  text-align: right;
 }
 
+/* 消息气泡 */
+.message-bubble {
+  padding: 0.75rem;
+  border-radius: 12px;
+  background-color: white;
+  word-wrap: break-word;
+  position: relative;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+.self-message .message-bubble {
+  background-color: #95ec69; /* 绿色气泡，类似微信 */
+  color: #000;
+}
+
+/* 时间样式 */
 .message-time {
-  font-size: 0.75rem;
-  color: #888;
+  font-size: 0.7rem;
+  color: #999;
   margin-top: 0.25rem;
+  padding: 0 0.25rem;
+}
+
+.self-message .message-time {
   text-align: right;
 }
 
 .chat-input {
   display: flex;
   padding: 0.75rem;
-  border-top: 1px solid #eee;
+  border-top: 1px solid #e6e6e6;
+  background-color: white;
 }
 
 .chat-input input {
   flex: 1;
   padding: 0.75rem;
   border: 1px solid #ddd;
-  border-radius: 4px;
+  border-radius: 20px;
   font-size: 1rem;
   margin-right: 0.5rem;
+  background-color: #f5f5f5;
 }
 
 .chat-input button {
@@ -213,7 +310,7 @@ export default {
   background-color: #4CAF50;
   color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 20px;
   cursor: pointer;
   transition: background-color 0.2s;
 }

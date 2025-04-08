@@ -1,206 +1,265 @@
 <template>
   <div class="user-list-container">
-    <h3 class="user-list-title">玩家列表</h3>
-    <div v-if="loading" class="loading">加载中...</div>
-    <ul v-else class="user-list">
-      <li v-for="user in users" :key="user.id" class="user-item" :class="{ 'current-user': user.id === currentUserId }">
-        <div class="user-avatar" :style="avatarStyle(user)"></div>
+    <h2 class="user-list-title">{{ userCount }}/{{ roomData?.maxUsers || 8 }} 玩家</h2>
+    
+    <!-- 调试信息区域 -->
+    <div v-if="debugMode" class="debug-panel">
+      <div class="debug-title">调试信息</div>
+      <div>用户列表长度: {{ users.length }}</div>
+      <div>当前用户ID: {{ currentUserId }}</div>
+      <div>房主ID: {{ roomData?.hostId }}</div>
+      <div>房间ID: {{ roomData?.id }}</div>
+      <div>WebSocket连接: {{ isConnected ? '已连接' : '未连接' }}</div>
+      <div v-if="users.length > 0">
+        第一位用户: {{ users[0]?.username }} ({{ users[0]?.id }})
+      </div>
+    </div>
+    
+    <!-- 用户列表为空的提示 -->
+    <div v-if="userListIsEmpty" class="empty-list-warning">
+      <p><strong>玩家列表为空!</strong></p>
+      <p>可能原因:</p>
+      <ul>
+        <li>WebSocket连接未成功建立</li>
+        <li>房间创建/加入过程未完成</li>
+        <li>服务器未返回用户数据</li>
+      </ul>
+      <p>请检查浏览器控制台获取更多信息</p>
+    </div>
+    
+    <!-- 实际用户列表 -->
+    <div v-else class="user-list">
+      <div v-for="user in users" :key="user.id" class="user-item" :class="getUserClass(user)">
+        <div class="user-avatar" :style="getAvatarStyle(user)"></div>
         <div class="user-info">
-          <span class="user-name">{{ user.username }}</span>
-          <span v-if="user.is_host || user.id === hostId" class="host-badge">房主</span>
-          <span v-if="user.id === currentUserId" class="self-badge">我</span>
+          <div class="user-name">{{ user.username }}{{ user.isHost || user.is_host ? ' (房主)' : '' }}</div>
+          <div class="user-status">{{ user.status }}</div>
         </div>
-        <div class="user-status">
-          {{ user.status || '在线' }}
-        </div>
-      </li>
-      <li v-if="users.length < maxPlayers" class="user-item empty">
-        <div class="waiting-slot">等待玩家加入...</div>
-      </li>
-    </ul>
-    <div class="user-count">{{ users.length }}/{{ maxPlayers }} 玩家</div>
+      </div>
+    </div>
   </div>
 </template>
 
-<script>
-import { computed, ref } from 'vue'
-import { userStore } from '../store/user'
+<script setup>
+import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute } from 'vue-router';
+import websocketService from '../services/websocket';
 
-export default {
-  name: 'UserList',
-  
-  props: {
-    users: {
-      type: Array,
-      default: () => []
-    },
-    hostId: {
-      type: String,
-      default: ''
-    },
-    maxPlayers: {
-      type: Number,
-      default: 8
-    },
-    loading: {
-      type: Boolean,
-      default: false
-    }
+const props = defineProps({
+  users: {
+    type: Array,
+    default: () => []
   },
-  
-  setup() {
-    // 当前用户ID
-    const currentUserId = computed(() => userStore.user?.id || '')
-    
-    // 默认头像颜色
-    const avatarColors = [
-      '#FF5722', '#E91E63', '#9C27B0', '#673AB7', 
-      '#3F51B5', '#2196F3', '#03A9F4', '#00BCD4',
-      '#009688', '#4CAF50', '#8BC34A', '#CDDC39'
-    ]
-    
-    // 生成头像样式
-    const avatarStyle = (user) => {
-      if (user.avatar && user.avatar.startsWith('http')) {
-        // 使用提供的头像URL
-        return {
-          backgroundImage: `url(${user.avatar})`,
-          backgroundSize: 'cover',
-          backgroundPosition: 'center'
-        }
-      } else {
-        // 生成一个基于用户ID的随机颜色
-        const colorIndex = user.id ? Math.abs(user.id.charCodeAt(0) % avatarColors.length) : 0
-        const bgColor = avatarColors[colorIndex]
-        const initials = user.username ? user.username.charAt(0).toUpperCase() : '?'
-        
-        return {
-          backgroundColor: bgColor,
-          color: 'white',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: '1.2rem',
-          fontWeight: 'bold',
-          '::before': {
-            content: `"${initials}"`
-          }
-        }
-      }
-    }
-    
-    return {
-      currentUserId,
-      avatarStyle
-    }
+  currentUser: {
+    type: Object,
+    default: () => ({})
+  },
+  roomData: {
+    type: Object,
+    default: () => null
   }
-}
+});
+
+// 调试模式
+const debugMode = ref(true);
+
+// 获取当前用户ID
+const currentUserId = computed(() => {
+  // 优先使用props传入的currentUser
+  if (props.currentUser && props.currentUser.id) {
+    return props.currentUser.id;
+  }
+  
+  // 否则从localStorage获取
+  try {
+    return JSON.parse(localStorage.getItem('user'))?.id || '';
+  } catch (e) {
+    console.error('获取当前用户ID失败:', e);
+    return '';
+  }
+});
+
+// 用户数量计算属性
+const userCount = computed(() => {
+  return props.users ? props.users.length : 0;
+});
+
+// 判断WebSocket是否连接
+const isConnected = computed(() => {
+  return websocketService.isConnected;
+});
+
+// 用户列表是否为空
+const userListIsEmpty = computed(() => {
+  return !props.users || props.users.length === 0;
+});
+
+// 获取用户CSS类
+const getUserClass = (user) => {
+  const classes = [];
+  
+  // 处理用户名可能带有空格的情况
+  const userId = user.id || '';
+  const currentId = currentUserId.value || '';
+  
+  if (userId.trim() === currentId.trim()) {
+    classes.push('current-user');
+  }
+  
+  if (user.isHost || user.is_host) {
+    classes.push('host');
+  }
+  
+  if (user.status === 'ready' || user.status === '准备') {
+    classes.push('ready');
+  }
+  
+  return classes;
+};
+
+// 获取头像样式
+const getAvatarStyle = (user) => {
+  // 检查用户是否有头像
+  if (user.avatar) {
+    // 检查是否是完整URL或相对路径
+    if (user.avatar.startsWith('http') || user.avatar.startsWith('/')) {
+      return { backgroundImage: `url(${user.avatar})` };
+    }
+    
+    // 否则可能是相对路径
+    return { backgroundImage: `url(/${user.avatar})` };
+  }
+  
+  // 如果没有头像，使用背景色头像
+  const userIdSum = [...(user.id || '0')].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const hue = userIdSum % 360;
+  return {
+    backgroundColor: `hsl(${hue}, 70%, 50%)`,
+    color: 'white',
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    fontSize: '1.2em',
+    fontWeight: 'bold'
+  };
+};
+
+// 在组件挂载时记录用户数据
+onMounted(() => {
+  console.log('[UserList] 组件挂载，用户列表:', props.users);
+  console.log('[UserList] 当前用户:', props.currentUser);
+  console.log('[UserList] 房间数据:', props.roomData);
+});
+
+// 监听用户列表变化
+watch(() => props.users, (newUsers) => {
+  console.log('[UserList] 用户列表已更新:', newUsers);
+}, { deep: true });
+
 </script>
 
 <style scoped>
 .user-list-container {
-  background-color: white;
+  padding: 15px;
+  background-color: #f8f9fa;
   border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-  padding: 1rem;
-  margin-bottom: 1rem;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  margin-bottom: 20px;
 }
 
 .user-list-title {
-  font-size: 1.1rem;
-  margin: 0 0 1rem 0;
-  color: #333;
-  text-align: center;
-}
-
-.loading {
-  text-align: center;
-  padding: 1rem;
-  color: #666;
+  font-size: 1.2rem;
+  margin-bottom: 15px;
+  color: #495057;
+  border-bottom: 1px solid #dee2e6;
+  padding-bottom: 8px;
 }
 
 .user-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 10px;
 }
 
 .user-item {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 0.75rem;
-  border-radius: 4px;
-  background-color: #f5f5f5;
+  padding: 10px;
+  background-color: #fff;
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  transition: transform 0.2s, box-shadow 0.2s;
 }
 
-.user-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  margin-right: 0.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background-color: #ccc;
-  color: white;
-  font-weight: bold;
+.user-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 3px 6px rgba(0,0,0,0.12);
 }
 
 .user-item.current-user {
-  background-color: #e8f5e9;
+  border-left: 3px solid #4c6ef5;
 }
 
-.user-item.empty {
-  background-color: #f5f5f5;
-  color: #999;
-  font-style: italic;
+.user-item.host {
+  border-left: 3px solid #fd7e14;
+}
+
+.user-item.ready {
+  background-color: #e6f7ec;
+}
+
+.user-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  margin-right: 12px;
+  background-size: cover;
+  background-position: center;
+  background-color: #e9ecef;
 }
 
 .user-info {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
   flex: 1;
 }
 
 .user-name {
-  font-weight: 500;
-}
-
-.host-badge {
-  background-color: #4CAF50;
-  color: white;
-  font-size: 0.7rem;
-  padding: 0.1rem 0.4rem;
-  border-radius: 4px;
-}
-
-.self-badge {
-  background-color: #2196F3;
-  color: white;
-  font-size: 0.7rem;
-  padding: 0.1rem 0.4rem;
-  border-radius: 4px;
+  font-weight: 600;
+  margin-bottom: 2px;
+  color: #212529;
 }
 
 .user-status {
-  font-size: 0.8rem;
-  color: #666;
+  font-size: 0.85rem;
+  color: #6c757d;
 }
 
-.waiting-slot {
-  width: 100%;
-  text-align: center;
+.debug-panel {
+  margin-bottom: 15px;
+  padding: 10px;
+  background-color: #f1f3f5;
+  border: 1px dashed #adb5bd;
+  border-radius: 4px;
+  font-size: 0.85rem;
 }
 
-.user-count {
-  margin-top: 1rem;
-  text-align: center;
-  font-size: 0.9rem;
-  color: #666;
+.debug-title {
+  font-weight: bold;
+  margin-bottom: 5px;
+  color: #495057;
+}
+
+.empty-list-warning {
+  padding: 15px;
+  background-color: #fff3cd;
+  border: 1px solid #ffeeba;
+  border-radius: 6px;
+  color: #856404;
+  margin: 10px 0;
+}
+
+.empty-list-warning ul {
+  margin-top: 5px;
+  margin-bottom: 5px;
+  padding-left: 20px;
 }
 </style> 
