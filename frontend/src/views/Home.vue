@@ -70,6 +70,12 @@
               />
             </div>
             
+            <!-- 错误消息显示-->
+            <div v-if="error" class="error-message-box">
+              <div class="error-icon">⚠️</div>
+              <div class="error-text">{{ error }}</div>
+            </div>
+            
             <!-- 游戏设置部分 -->
             <div class="game-settings">
               <h3 class="settings-title">游戏设置</h3>
@@ -149,8 +155,6 @@
               创建房间
             </button>
           </form>
-          
-          <div v-if="error" class="error-message">{{ error }}</div>
         </div>
 
         <div class="join-by-code">
@@ -292,9 +296,22 @@ export default {
     
       // 处理错误
       websocketService.registerHandler('error', (data) => {
-        console.error('收到WebSocket错误:', data.message)
-        error.value = `操作失败: ${data.message}`
-        loading.value = false
+        console.error('收到WebSocket错误:', data);
+        loading.value = false;
+        
+        // 使用roomStore中的错误信息（已经在roomStore中处理）
+        if (roomStore.error) {
+          error.value = roomStore.error;
+        } else {
+          // 备用处理（直接从消息中获取）
+          if (data.error) {
+            error.value = data.details ? `${data.error}: ${data.details}` : data.error;
+          } else if (data.data && data.data.message) {
+            error.value = data.data.message;
+          } else {
+            error.value = '操作失败，请稍后重试';
+          }
+        }
       })
     }
     
@@ -766,5 +783,22 @@ export default {
 .create-btn:disabled, .join-btn:disabled {
   background-color: #ccc;
   cursor: not-allowed;
+}
+
+.error-message-box {
+  background-color: #ffebee;
+  border: 1px solid #d32f2f;
+  border-radius: 4px;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.error-icon {
+  color: #d32f2f;
+  margin-bottom: 0.5rem;
+}
+
+.error-text {
+  color: #721c24;
 }
 </style> 

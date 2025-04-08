@@ -101,9 +101,34 @@ function initWebSocketHandlers() {
   // 错误处理
   websocketService.registerHandler('error', (data) => {
     console.error(`${LOG_PREFIX} 收到错误事件:`, data);
-    if (data.action === 'create_room') {
-      useRoomStore().$state.error = `操作失败: ${data.error}${data.details ? ` (${data.details})` : ''}`;
+    const store = useRoomStore();
+    
+    // 提取错误信息
+    let errorMessage = '';
+    
+    // 处理不同格式的错误消息
+    if (data.error) {
+      // 新格式错误
+      errorMessage = data.error;
+      if (data.details) {
+        errorMessage += `: ${data.details}`;
+      }
+    } else if (data.data && data.data.message) {
+      // 旧格式错误
+      errorMessage = data.data.message;
+    } else {
+      // 未知格式
+      errorMessage = '操作失败，请稍后重试';
     }
+    
+    // 记录详细日志
+    console.error(`${LOG_PREFIX} 错误类型: ${data.action || '未知'}, 错误信息: ${errorMessage}`);
+    
+    // 设置错误状态
+    store.error = errorMessage;
+    store.loading = false;
+    
+    // 移除弹窗提示，只使用页面上的红色错误框显示
   });
   
   // 其他事件处理器...
@@ -182,6 +207,21 @@ export const useRoomStore = defineStore('room', {
         if (!userId || !username) {
           this.error = '用户信息不完整，无法创建房间'
           this.logError(this.error)
+          return
+        }
+        
+        // 检查用户是否已在房间中
+        if (this.currentRoom) {
+          this.error = '您已在房间中，请先离开当前房间再创建新房间'
+          this.logError(this.error)
+          this.loading = false
+          
+          // 可选：自动跳转到当前房间
+          const router = useRouter()
+          if (this.currentRoom.id) {
+            router.push(`/room/${this.currentRoom.id}`)
+          }
+          
           return
         }
 
@@ -296,20 +336,46 @@ export const useRoomStore = defineStore('room', {
     },
     
     // 加入房间
-    async joinRoom(roomId, userInfo = {}) {
-      this.loading = true
-      this.error = null
-      
+    async joinRoom(roomId, invitationCode = null) {
       try {
-        // 获取用户信息
-        const userId = userInfo.user_id || localStorage.getItem('userId') || JSON.parse(localStorage.getItem('user'))?.id
-        let username = userInfo.username || localStorage.getItem('username') || JSON.parse(localStorage.getItem('user'))?.username
-        const avatar = userInfo.avatar || JSON.parse(localStorage.getItem('user'))?.avatar || '/default_avatar.jpg'
+        this.loading = true
+        this.error = null
         
-        // 确保用户名没有前后空格
-        if (username) {
-          username = username.trim()
+        // 检查用户是否已在房间中
+        if (this.currentRoom) {
+          this.error = '您已在房间中，请先离开当前房间再加入新房间'
+          this.logError(this.error)
+          this.loading = false
+          
+          // 可选：自动跳转到当前房间
+          const router = useRouter()
+          if (this.currentRoom.id) {
+            router.push(`/room/${this.currentRoom.id}`)
+          }
+          
+          return
         }
+        
+        // 获取用户信息
+        let userId, username, avatar
+        
+        // 首先从本地存储的用户对象中获取
+        const userStr = localStorage.getItem('user')
+        if (userStr) {
+          try {
+            const user = JSON.parse(userStr)
+            userId = user.id
+            username = user.username.trim() // 确保用户名没有前后空格
+            avatar = user.avatar || '/default_avatar.jpg'
+          } catch (e) {
+            this.logError('解析用户信息失败:', e)
+          }
+        }
+        
+        // 如果上面方法获取失败，尝试分别获取
+        if (!userId) userId = localStorage.getItem('userId')
+        if (!username) username = localStorage.getItem('username')
+        if (!avatar) avatar = '/default_avatar.jpg'
         
         if (!userId || !username) {
           this.error = '用户信息不完整，无法加入房间'
@@ -319,38 +385,54 @@ export const useRoomStore = defineStore('room', {
         }
         
         // 检查WebSocket连接
-        if (!websocketService.isConnected) {
+        if (!websocketService.isConnected || 
+            !websocketService.socket || 
+            websocketService.socket.readyState !== WebSocket.OPEN) {
+          
           this.log('WebSocket未连接，尝试连接...')
           
           try {
             await websocketService.connect(userId)
-            this.log('WebSocket重新连接成功')
-            
-            // 给连接稳定一点时间
-            await new Promise(resolve => setTimeout(resolve, 1000))
-          } catch (err) {
-            this.logError('WebSocket连接失败，无法加入房间:', err)
-            this.error = '网络连接失败，请检查防火墙设置或网络连接'
+            this.log('WebSocket连接成功，现在加入房间')
+          } catch (error) {
+            this.logError('WebSocket连接失败:', error)
+            this.error = `无法连接到服务器: ${error.message || '未知错误'}`
             this.loading = false
             return
           }
         }
         
-        // 准备加入房间的消息
-        const message = {
-          type: 'join_room',
+        // 根据传入的参数判断是通过房间ID还是邀请码加入
+        let data = {
+          type: "join_room",
           data: {
-            room_id: roomId,
             user_id: userId,
-            username: username, // 已确保移除前后空格
-            avatar: avatar
+            username,
+            avatar
           }
         }
         
-        this.log('发送加入房间请求:', message)
+        // 添加房间ID或邀请码到请求中
+        if (roomId) {
+          data.data.room_id = roomId
+        } else if (invitationCode) {
+          data.data.invitation_code = invitationCode
+        } else {
+          this.error = '需要提供房间ID或邀请码'
+          this.loading = false
+          return
+        }
         
-        // 发送加入房间请求
-        await websocketService.sendMessage(message)
+        this.log('发送加入房间请求:', data)
+        websocketService.send(data)
+        
+        // 等待响应
+        setTimeout(() => {
+          if (this.loading) {
+            this.loading = false
+            this.error = '加入房间超时，请重试'
+          }
+        }, 10000)
         
       } catch (error) {
         this.error = `加入房间失败: ${error.message}`

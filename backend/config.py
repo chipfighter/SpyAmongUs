@@ -15,13 +15,13 @@ REDIS_DB = int(os.getenv("REDIS_DB", 0))
 
 # Redis键前缀（房间相关）
 ROOM_KEY_PREFIX = "room:"   # Hash| room:{room_id} -> hash{所有房间属性}
+PUBLIC_ROOMS_KEY = "public_rooms"   # Set| 公共房间ID集合（快速查找当前公共房间）
 ROOM_CODE_KEY_PREFIX = "room:by_code:"      # String| 邀请码->房间ID的集合（用于快速反向查找）
 ROOM_MESSAGES_KEY_PREFIX = "room:messages:"     # List| 房间消息列表，使用列表类型存储，room:messages:{room_id} -> list[Message]
 ROOM_USERS_KEY_PREFIX = "room:users:"       # Set| 房间用户id集合，room:users:{room_id} -> set[user_id]
-PUBLIC_ROOMS_KEY = "public_rooms"   # Set| 公共房间ID集合（快速查找当前公共房间）
 # Redis键前缀（用户相关）
-USER_STATUS_KEY_PREFIX = "user:status:" # String| 用户状态，user:status:{user_id} -> string{"online"|"offline"|"in_room"|"playing"}
 USER_ONLINE_SET_KEY = "users:online"    # Set| 所有在线用户的ID集合（用于快速查询谁在线）
+USER_STATUS_KEY_PREFIX = "user:status:" # String| 用户状态，user:status:{user_id} -> string{"online"|"offline"|"in_room"|"playing"}
 USER_CURRENT_ROOM_KEY_PREFIX = "user:current_room:" # String| 用户当前所在房间，user:current_room:{user_id} -> string{room_id}
 USER_INFO_KEY_PREFIX = "user:info:"    # Hash| 用户基本信息缓存（仅仅在进入房间的时候记录），user:info:{user_id} -> hash{username, avatar...}
 

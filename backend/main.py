@@ -1,5 +1,5 @@
 """
-核心文件：多人聊天系统v0.0.3
+核心文件：多人聊天系统v0.0.4
 """
 
 import uvicorn
@@ -294,6 +294,23 @@ async def websocket_endpoint(websocket: WebSocket):
                         if user_id != req_user_id:
                             raise ValueError("用户ID与连接不匹配")
                         
+                        # 检查用户是否已在其他房间
+                        current_room_id = await redis_client.get(f"user:current_room:{user_id}")
+                        if current_room_id:
+                            # 获取当前房间信息
+                            current_room = await room_service.get_room_by_id(current_room_id)
+                            current_room_name = current_room.name if current_room else "未知房间"
+                            
+                            logger.warning(f"用户 {user_id} 已在房间 {current_room_id} ({current_room_name}) 中，尝试创建新房间被拒绝")
+                            
+                            await websocket.send_json({
+                                "type": "error",
+                                "error": "已在其他房间",
+                                "details": f"您已在房间 '{current_room_name}' 中，请先离开当前房间再创建新房间",
+                                "action": "create_room"
+                            })
+                            continue
+                        
                         logger.info(f"创建房间: {room_name}, 用户: {username}({user_id}), 公开: {is_public}")
                         
                         # 缓存用户基本信息（仅在创建房间时）
@@ -377,6 +394,23 @@ async def websocket_endpoint(websocket: WebSocket):
                             await websocket.send_json({
                                 "type": "error",
                                 "data": {"message": "Room not found"}
+                            })
+                            continue
+
+                        # 检查用户是否已在其他房间
+                        current_room_id = await redis_client.get(f"user:current_room:{actual_user_id}")
+                        if current_room_id and current_room_id != room.id:
+                            # 获取当前房间信息
+                            current_room = await room_service.get_room_by_id(current_room_id)
+                            current_room_name = current_room.name if current_room else "未知房间"
+                            
+                            logger.warning(f"用户 {actual_user_id} 已在房间 {current_room_id} ({current_room_name}) 中，尝试加入房间 {room.id} ({room.name}) 被拒绝")
+                            
+                            await websocket.send_json({
+                                "type": "error",
+                                "error": "已在其他房间",
+                                "details": f"您已在房间 '{current_room_name}' 中，请先离开当前房间再加入新房间",
+                                "action": "join_room"
                             })
                             continue
 

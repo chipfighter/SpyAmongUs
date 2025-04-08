@@ -210,17 +210,28 @@ class RoomService:
         # 检查用户是否已经在其他房间
         current_room_id = await self.redis.get_user_current_room(user_id)
         if current_room_id and current_room_id != room_id:
-            # 先从之前的房间移除
-            logger.info(f"用户 {user_id} 已在房间 {current_room_id}，先移除")
-            await self.remove_user_from_room(current_room_id, user_id)
+            # 获取当前房间信息用于日志
+            current_room = await self.get_room_by_id(current_room_id)
+            current_room_name = current_room.name if current_room else "未知房间"
+            
+            logger.warning(f"用户 {user_id} 已在房间 {current_room_id} ({current_room_name})，尝试加入房间 {room_id} ({room.name})")
+            
+            # 如果是同一个房间，允许加入（可能是重新连接）
+            if current_room_id == room_id:
+                logger.info(f"用户 {user_id} 重新连接到房间 {room_id} ({room.name})")
+            else:
+                # 不再自动移除用户，而是在main.py的消息处理中拒绝请求
+                logger.warning(f"用户 {user_id} 尝试同时在多个房间中，已被拒绝")
+                return False
 
+        # 如果是新加入或重新连接到同一房间
         # 更新房间用户列表
         room.users.add(user_id)
         room_data = room.dict()
 
         # 保存更新后的房间数据
         await self.redis.save_room(room.id, room_data)
-        logger.info(f"用户 {user_id} 已添加到房间 {room_id}")
+        logger.info(f"用户 {user_id} 已添加到房间 {room_id} ({room.name})")
 
         # 更新用户-房间关系
         await self.redis.add_user_to_room(user_id, room_id)
