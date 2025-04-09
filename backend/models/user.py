@@ -1,12 +1,23 @@
 """
 model: User
 """
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Set
 import uuid
 import hashlib
 import secrets
 import string
+
+
+class UserStatistics(BaseModel):
+    total_games: int = 0
+    win_rates: Dict[str, float] = {"civilian": 0.0, "spy": 0.0}
+
+
+class StyleProfile(BaseModel):
+    summary: str = ""   # 用户风格偏向简要说明（100字以内）
+    tags: Set[str] = Field(default_factory=set)
+    vectors: Dict[str, float] = {}  # 用户性格偏向数据说明（暂时不用）
 
 
 class User(BaseModel):
@@ -15,31 +26,15 @@ class User(BaseModel):
     password_hash: Optional[str] = None     # 密码哈希（存储）
     salt: Optional[str] = None              # 密码盐值
     avatar_url: Optional[str] = None        # 头像URL
+    statistics: UserStatistics = UserStatistics()    # 用户统计数据
+    style_profile: StyleProfile = StyleProfile()     # 结构化画像数据
 
-    # 不返回敏感字段
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "id": "user-1",
-                "username": "测试用户",
-                "avatar_url": None
-            }
-        }
-        
     def dict(self, *args, **kwargs):
         """重写dict方法，排除敏感信息（盐值+密码Hash值）"""
         data = super().dict(*args, **kwargs)
         data.pop("password_hash", None)
         data.pop("salt", None)
         return data
-
-    @classmethod
-    def create_temp_user(cls, user_id: str, username: str) -> 'User':
-        """创建临时用户"""
-        return cls(
-            id=user_id,
-            username=username
-        )
 
     @staticmethod
     def hash_password(password: str, salt: str = None) -> tuple:
@@ -67,7 +62,9 @@ class User(BaseModel):
             id=user_id,
             username=username,
             password_hash=password_hash,
-            salt=salt
+            salt=salt,
+            statistics=UserStatistics(),
+            style_profile=StyleProfile()
         )
 
     def verify_password(self, password: str) -> bool:
@@ -80,3 +77,4 @@ class User(BaseModel):
         
         # 比较哈希值
         return password_hash == self.password_hash
+
