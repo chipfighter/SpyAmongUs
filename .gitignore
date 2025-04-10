@@ -12,7 +12,8 @@
 # Other files
 **/stream_output.py
 # all temporary md files in backend
-backend/*.md    
+backend/docs/*.md
+backend/*.md
 **/*api_key*
 **/*.env
 
