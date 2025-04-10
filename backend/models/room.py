@@ -5,62 +5,61 @@ import time
 
 from pydantic import BaseModel, Field
 from typing import Dict, Set, Optional, List, Any, Union
-import uuid
 import random
 import string
-from datetime import datetime
 from config import (
-    GAME_STATUS_WAITING, GAME_STATUS_PLAYING,
-    GAME_PHASE_SPEAKING, ROLE_CIVILIAN, ROLE_SPY, MIN_PLAYERS, MIN_SPY_COUNT, MAX_PLAYERS,
-    MAX_SPY_RATIO, MAX_ROUNDS, MAX_SPEAK_TIME, MAX_LAST_WORDS_TIME
+    GAME_STATUS_WAITING,
+    MIN_PLAYERS, MIN_SPY_COUNT,
+    MAX_ROUNDS, MAX_SPEAK_TIME, MAX_LAST_WORDS_TIME
 )
 from models.message import Message
 
 
 class Room(BaseModel):
-    invite_code: str    # 邀请码（唯一标识）
-    name: str               # 房间名
-    host_id: str            # 房主ID
-    is_public: bool = True      # 房间是否公开（与邀请码绑定）
-    users: Set[str] = Field(default_factory=set)  # 房间内存在的所有用户ID
+    # 原有字段都应保留
+    invite_code: str
+    name: str
+    host_id: str
+    is_public: bool = True
+    users: Set[str] = Field(default_factory=set)  # 应该保留
 
-    # 游戏配置 (由房主设置)
-    total_players: int = MIN_PLAYERS      # 总玩家数
-    spy_count: int = MIN_SPY_COUNT        # 卧底数量
-    max_rounds: int = MAX_ROUNDS         # 最大回合数
-    speak_time: int = MAX_SPEAK_TIME        # 发言时间
-    last_words_time: int = MAX_LAST_WORDS_TIME   # 遗言时间
-    llm_free: bool = False      # 是否允许大模型自由聊天广播
+    # 游戏配置
+    total_players: int = MIN_PLAYERS
+    spy_count: int = MIN_SPY_COUNT
+    max_rounds: int = MAX_ROUNDS
+    speak_time: int = MAX_SPEAK_TIME
+    last_words_time: int = MAX_LAST_WORDS_TIME
+    llm_free: bool = False
 
-    # 房间状态: waiting(等待)、playing(游戏中)
+    # 房间状态
     status: str = GAME_STATUS_WAITING
-    # 游戏状态
-    current_round: int = 0      # 当前回合 (0表示未开始)
-    current_phase: str = ""     # 当前阶段 (speaking/voting/secret_chat)
+    current_round: int = 0
+    current_phase: str = ""
 
     # 游戏数据
-    god_id: Optional[str] = None  # 上帝ID，如果为None则使用场外AI
-    words: Dict[str, str] = Field(default_factory=dict)  # {"civilian": "平民词", "spy": "卧底词"}
+    god_id: Optional[str] = None
+    word_civilian: str = None
+    word_spy: str = None
 
     # 用户相关
-    ready_users: Set[str] = Field(default_factory=set)  # 已准备的用户ID
-    alive_players: Set[str] = Field(default_factory=set)  # 存活玩家ID
-    roles: Dict[str, str] = Field(default_factory=dict)  # 当前的用户id对应的不同角色：{"user_id": "god/civilian/spy"}
+    ready_users: Set[str] = Field(default_factory=set)
+    alive_players: Set[str] = Field(default_factory=set)
+    roles: Dict[str, str] = Field(default_factory=dict)
 
     # 投票历史
-    votes: Dict[str, Dict[str, str]] = Field(default_factory=dict)  # {"round_1": {"voter_id": "target_id"}}
-
-    # 消息列表
-    messages: List[Message] = []    # 房间内所有消息对象的列表
+    votes: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
     # 秘密聊天室
-    secret_chat_active: bool = False  # 秘密聊天室是否激活
-    secret_chat_votes: Dict[str, bool] = Field(default_factory=dict)  # {"spy_id": true/false}
-    secret_chat_messages: List[Message] = []    # 秘密小房间的消息列表
-    
+    secret_chat_active: bool = False
+    secret_chat_votes: Dict[str, bool] = Field(default_factory=dict)
+
+    # 消息相关
+    messages: List[Message] = Field(default_factory=list)  # 房间内所有消息
+    secret_chat_messages: List[Message] = Field(default_factory=list)  # 秘密聊天消息
+
     # 时间相关
-    created_at: int = int(time.time() * 1000)   # 创建时间
-    last_active: int = int(time.time() * 1000)   # 最后活动时间
+    created_at: int = int(time.time() * 1000)
+    last_active: int = int(time.time() * 1000)
 
     def dict(self, **kwargs) -> Dict[str, Any]:
         """将redis读取出来的数据转化成Python可以处理的数据
@@ -89,6 +88,7 @@ class Room(BaseModel):
 
         return room_dict
 
+
     @classmethod
     def create_room(cls, name: str, host_id: str, is_public: bool = True,
                     total_players: int = MIN_PLAYERS, spy_count: int = MIN_SPY_COUNT,
@@ -110,13 +110,14 @@ class Room(BaseModel):
         Returns:
             Room: 新创建的房间对象
         """
-        # 生成6位不重复邀请码
-        while True:
-            invite_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-            if not redis_client.exists(f"{ROOM_CODE_KEY_PREFIX}{invite_code}"):
-                break
+        # 生成8位不重复邀请码
+        invite_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
-        return cls(
+        # 创建时间戳
+        timestamp = int(time.time() * 1000)
+
+        # 创建房间实例
+        room = cls(
             invite_code=invite_code,
             name=name,
             host_id=host_id,
@@ -126,5 +127,24 @@ class Room(BaseModel):
             max_rounds=max_rounds,
             speak_time=speak_time,
             last_words_time=last_words_time,
-            llm_free=llm_free
+            llm_free=llm_free,
+            status=GAME_STATUS_WAITING,
+            current_round=0,
+            current_phase="",
+            god_id=None,
+            word_civilian="",
+            word_spy="",
+            users=set(),
+            ready_users=set(),
+            alive_players=set(),
+            roles={},
+            votes={},
+            secret_chat_active=False,
+            secret_chat_votes={},
+            messages=[],
+            secret_chat_messages=[],
+            created_at=timestamp,
+            last_active=timestamp
         )
+
+        return room

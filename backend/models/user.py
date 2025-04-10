@@ -1,6 +1,8 @@
 """
 model: User
 """
+import time
+
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Set
 import uuid
@@ -11,23 +13,29 @@ import string
 
 class UserStatistics(BaseModel):
     total_games: int = 0
-    win_rates: Dict[str, float] = {"civilian": 0.0, "spy": 0.0}
+    win_rates: Dict[str, float] = Field(default_factory=lambda: {"civilian": 0.0, "spy": 0.0})
 
 
 class StyleProfile(BaseModel):
-    summary: str = ""   # 用户风格偏向简要说明（100字以内）
+    summary: str = Field(default="", max_length=60)     # 用户风格偏向简要说明（60字以内）
     tags: Set[str] = Field(default_factory=set)
     vectors: Dict[str, float] = {}  # 用户性格偏向数据说明（暂时不用）
 
 
 class User(BaseModel):
-    id: str                 # 用户ID
-    username: str           # 用户名
-    password_hash: Optional[str] = None     # 密码哈希（存储）
-    salt: Optional[str] = None              # 密码盐值
-    avatar_url: Optional[str] = None        # 头像URL
-    statistics: UserStatistics = UserStatistics()    # 用户统计数据
-    style_profile: StyleProfile = StyleProfile()     # 结构化画像数据
+    id: str  # 用户ID
+    username: str  # 用户名
+    password_hash: Optional[str] = None  # 密码哈希（存储）
+    salt: Optional[str] = None  # 密码盐值
+    avatar_url: Optional[str] = None  # 头像URL
+
+    # 用户状态相关
+    status: str = "online"  # 用户状态: online/in_room/playing
+    current_room: Optional[str] = None  # 用户当前所在房间邀请码
+
+    # 用户数据
+    statistics: UserStatistics = UserStatistics()  # 用户统计数据
+    style_profile: StyleProfile = StyleProfile()  # 结构化画像数据
 
     def dict(self, *args, **kwargs):
         """重写dict方法，排除敏感信息（盐值+密码Hash值）"""
@@ -54,15 +62,17 @@ class User(BaseModel):
         """根据用户名+密码，创建带密码的用户"""
         # 生成12位用户ID
         user_id = f"usr_{uuid.uuid4().hex[:12]}"
-        
+
         # 加密密码+初始化盐值
         password_hash, salt = cls.hash_password(password)
-        
+
         return cls(
             id=user_id,
             username=username,
             password_hash=password_hash,
             salt=salt,
+            status="online",
+            current_room=None,
             statistics=UserStatistics(),
             style_profile=StyleProfile()
         )

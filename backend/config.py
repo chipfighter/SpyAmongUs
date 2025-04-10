@@ -13,20 +13,22 @@ REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_DB = int(os.getenv("REDIS_DB", 0))
 
-# Redis键前缀（房间相关）
-ROOM_KEY_PREFIX = "room:"   # Hash| room:{room_id} -> hash{所有房间属性}
-PUBLIC_ROOMS_KEY = "public_rooms"   # Set| 公共房间ID集合（快速查找当前公共房间）
-ROOM_CODE_KEY_PREFIX = "room:by_code:"      # String| 邀请码->房间ID的集合（用于快速反向查找）
-ROOM_MESSAGES_KEY_PREFIX = "room:messages:"     # List| 房间消息列表，使用列表类型存储，room:messages:{room_id} -> list[Message]
-ROOM_USERS_KEY_PREFIX = "room:users:"       # Set| 房间用户id集合，room:users:{room_id} -> set[user_id]
-
 # Redis键前缀（用户相关）
-USER_STATUS_KEY_PREFIX = "user:status:" # String| 用户状态，user:status:{user_id} -> string{"online"|"in_room"|"playing"}
-USER_CURRENT_ROOM_KEY_PREFIX = "user:current_room:" # String| 用户当前所在房间，user:current_room:{user_id} -> string{room_id}
-USER_INFO_KEY_PREFIX = "user:info:"    # Hash| 用户基本信息缓存（登录时记录），user:info:{user_id} -> hash{username, avatar...}
-USER_LAST_ACTIVE_KEY_PREFIX = "user:last_active:" # String| 用户最后活跃时间，user:last_active:{user_id} -> timestamp
-USER_STYLE_KEY_PREFIX = "user:style:"  # Hash| 用户风格画像缓存
-USER_STATISTICS_KEY_PREFIX = "user:statistics:"  # Hash| 用户统计信息缓存
+USER_KEY_PREFIX = "user:"  # Hash| 用户数据主键，user:{user_id} -> hash{所有用户信息}
+# Redis键前缀（房间相关）
+ROOM_KEY_PREFIX = "room:"  # Hash| 房间主键，room:{invite_code} -> hash{所有房间基本属性}
+PUBLIC_ROOMS_KEY = "public_rooms"  # Set| 公共房间邀请码集合
+# 房间用户相关
+ROOM_USERS_KEY_PREFIX = "room:%s:users"  # Set| 房间用户id集合
+ROOM_READY_USERS_KEY_PREFIX = "room:%s:ready_users"  # Set| 准备用户id集合
+ROOM_ALIVE_PLAYERS_KEY_PREFIX = "room:%s:alive_players"  # Set| 存活玩家id集合
+ROOM_ROLES_KEY_PREFIX = "room:%s:roles"  # Hash| 用户角色映射，{user_id: role}
+# 房间消息相关
+ROOM_MESSAGES_KEY_PREFIX = "room:%s:messages"  # List| 房间消息列表
+ROOM_SECRET_CHAT_MESSAGES_KEY_PREFIX = "room:%s:secret_chat:messages"  # List| 秘密聊天消息
+# 投票相关
+ROOM_VOTES_KEY_PREFIX = "room:%s:votes:%s"  # Hash| 投票记录，%s分别是invite_code和round
+ROOM_SECRET_VOTES_KEY_PREFIX = "room:%s:secret_votes:%s"  # Hash| 秘密聊天投票
 
 # MongoDB配置
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
@@ -36,6 +38,12 @@ MONGO_DB = os.getenv("MONGO_DB", "spy_among_us")
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
 APP_PORT = int(os.getenv("APP_PORT", 8000))
 DEBUG = os.getenv("DEBUG", "True").lower() == "true"
+
+# JWT配置
+JWT_SECRET_KEY = "Kj8#mP9$vL2@nX5&hQ7*wR4!tY6^cB3%fD1?gE9#iA2$jM5@kS7&lN4*wT6!xU8^yV3%zW1?bH9#"
+JWT_ALGORITHM = "HS256"
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 25  # 与Redis TTL保持一致
+JWT_REFRESH_TOKEN_EXPIRE_DAYS = 7     # 刷新令牌有效期7天
 
 # 用户状态常量
 USER_STATUS_ONLINE = "online"

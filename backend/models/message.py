@@ -8,31 +8,31 @@ class Message(BaseModel):
     """消息模型"""
     timestamp: int = int(time.time() * 1000)  # 时间戳 (Unix 时间戳, 毫秒)
     user_id: str            # 发送者ID
-    username: str           # 发送者用户名
+    user_name: str          # 发送者用户名 (改名从username为user_name)
     content: str            # 消息内容
     is_system: bool = False # 是否为系统消息
-    round: int = 0  # 当前消息所处的局数
+    round: str = "0"        # 所属回合（改为字符串类型）
 
     @classmethod
-    def create_user_message(cls, user_id: str, username: str, content: str) -> 'Message':
+    def create_user_message(cls, user_id: str, user_name: str, content: str) -> 'Message':
         """创建用户消息"""
         return cls(
-            timestamp=int(time.time() * 1000),  # 使用 Unix 时间戳
+            timestamp=int(time.time() * 1000),
             user_id=user_id,
-            username=username,
+            user_name=user_name,  # 使用user_name
             content=content,
             is_system=False,
-            round=0
+            round="0"  # 使用字符串
         )
 
     @classmethod
     def create_system_message(cls, content: str) -> 'Message':
         """创建系统消息"""
         return cls(
-            timestamp=int(time.time() * 1000),  # 使用 Unix 时间戳
+            timestamp=int(time.time() * 1000),
             user_id="system",
-            username="System",
+            user_name="System",  # 使用user_name
             content=content,
             is_system=True,
-            round=0
+            round="0"  # 使用字符串
         )
