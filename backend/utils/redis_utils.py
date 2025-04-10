@@ -1,31 +1,33 @@
 """
-Redis工具类
+utils: redis utils
 
-Description:
-    本系统使用Redis作为缓存层，处理与房间相关的临时数据和状态。
-    主要保存（配合config.py查看）：
-        1.房间信息
-        2.邀请码->房间ID的索引
-        3.房间内的消息
-        4.公共房间ID
-        5.用户在线状态
-        6.在线用户ID
-        7.用户所在的房间
-        8.房间中的用户列表（为了快速查询）
-        9.用户基本信息缓存
+Notes:
+    仅仅提供关于房间、用户信息的基本增、删、改、查操作，具体的逻辑全部放到service层处理
+    同时，尽可能保持mongodb的同步方法，先修改redis再修改磁盘mongodb
+    - 关于Redis 连接、断开、检查
+    - Redis的一系列基础操作
+    - 将用户读入redis
+    - 根据用户id删除用户
+    - 更新用户名、更新用户密码、更新用户状态、更新用户当前房间
+    - 根据id来查找用户所有信息
+    - 检查用户是否存在、TTL刷新操作
 
+To-Do:
+    - 修改用户的战绩以及画像
 """
 
-import json
-from typing import Dict, List, Optional, Set
+import time
+from typing import Optional, Set
 import redis.asyncio as redis
 from utils.logger_utils import get_logger
 from config import (
     REDIS_HOST, REDIS_PORT, REDIS_DB,
-    ROOM_KEY_PREFIX, ROOM_CODE_KEY_PREFIX,
-    ROOM_MESSAGES_KEY_PREFIX, PUBLIC_ROOMS_KEY, 
-    USER_CURRENT_ROOM_KEY_PREFIX, USER_STATUS_KEY_PREFIX,
-    ROOM_USERS_KEY_PREFIX, USER_INFO_KEY_PREFIX,
+    USER_KEY_PREFIX, ROOM_KEY_PREFIX,
+    PUBLIC_ROOMS_KEY, ROOM_USERS_KEY_PREFIX,
+    ROOM_READY_USERS_KEY_PREFIX, ROOM_ALIVE_PLAYERS_KEY_PREFIX,
+    ROOM_ROLES_KEY_PREFIX, ROOM_MESSAGES_KEY_PREFIX,
+    ROOM_SECRET_CHAT_MESSAGES_KEY_PREFIX, ROOM_VOTES_KEY_PREFIX,
+    ROOM_SECRET_VOTES_KEY_PREFIX
 )
 
 logger = get_logger(__name__)
@@ -34,6 +36,7 @@ class RedisClient:
     def __init__(self):
         self._redis = None
         self._pool = None
+        self.SESSION_TTL = 1500  # 25min的TTL设置
 
     async def connect(self):
         """连接Redis，使用连接池"""
@@ -60,6 +63,7 @@ class RedisClient:
             await self._redis.close()
         if self._pool:
             await self._pool.disconnect()
+
 
     # 所有Redis的基础操作
     async def set(self, key: str, value: str, ex: int = None) -> None:
@@ -93,179 +97,92 @@ class RedisClient:
         """检查值是否为集合成员"""
         return await self._redis.sismember(key, value)
 
-    # Room相关的操作
-    async def save_room(self, room_id: str, room_data: Dict) -> None:
-        """保存房间信息"""
+
+    # 用户相关的操作
+    async def cache_user(self, user_id: str, user_data: dict) -> bool:
+        """将用户数据存入Redis缓存"""
         try:
-            if self._redis is None:
-                logger.error("Redis客户端未初始化，无法保存房间")
-                raise Exception("Redis客户端未初始化")
-                
-            # 确保所有集合类型字段都转换为列表，因为Redis不能直接存储集合
-            set_fields = ["users", "leaving_in_game_users", "ready_users"]
-            for field in set_fields:
-                if field in room_data and isinstance(room_data[field], set):
-                    room_data[field] = list(room_data[field])
-
-            # 检查room_data是否包含所有必要字段
-            required_fields = ["id", "name", "host_id", "invitation_code"]
-            missing_fields = [field for field in required_fields if field not in room_data]
-            if missing_fields:
-                error_msg = f"房间数据缺少必要字段: {', '.join(missing_fields)}"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-                
-            # 将所有值转换为字符串，以避免Redis存储问题
-            string_room_data = {k: str(v) for k, v in room_data.items()}
-            
-            logger.info(f"保存房间 {room_id} 数据: {string_room_data}")
-            await self._redis.hset(f"{ROOM_KEY_PREFIX}{room_id}", mapping=string_room_data)
-            
-            # 设置更长的安全过期时间(24小时)，作为15min监听机制的安全措施
-            await self._redis.expire(f"{ROOM_KEY_PREFIX}{room_id}", 86400)
+            # 转换所有值为字符串
+            string_data = {k: str(v) if v is not None else "" for k, v in user_data.items()}
+            await self._redis.hmset(f"user:{user_id}", string_data)
+            # 过期时间设置为TTL的时长
+            await self._redis.expire(f"user:{user_id}", self.SESSION_TTL)
+            return True
         except Exception as e:
-            logger.error(f"保存房间失败 {room_id}: {str(e)}")
-            raise
+            logger.error(f"缓存用户数据失败: {str(e)}")
+            return False
 
-    async def get_room(self, room_id: str) -> Optional[Dict]:
-        """获取房间信息"""
-        return await self._redis.hgetall(f"{ROOM_KEY_PREFIX}{room_id}")
+    async def delete_user_cache(self, user_id: str) -> bool:
+        """删除用户的所有缓存数据"""
+        try:
+            await self._redis.delete(f"user:{user_id}")
+            return True
+        except Exception as e:
+            logger.error(f"删除用户缓存失败: {str(e)}")
+            return False
 
-    async def delete_room(self, room_id: str) -> None:
-        """删除房间"""
-        # 删除房间信息
-        await self._redis.delete(f"{ROOM_KEY_PREFIX}{room_id}")
-        # 从公开房间列表移除
-        await self.remove_from_public_rooms(room_id)
-        # 删除房间消息
-        await self._redis.delete(f"{ROOM_MESSAGES_KEY_PREFIX}{room_id}")
+    async def update_user_status(self, user_id: str, status: str) -> bool:
+        """更新用户状态"""
+        try:
+            await self._redis.hset(f"user:{user_id}", "status", status)
+            return True
+        except Exception as e:
+            logger.error(f"更新用户状态失败: {str(e)}")
+            return False
+
+    async def update_username(self, user_id: str, new_username: str) -> bool:
+        """更新用户名"""
+        try:
+            await self._redis.hset(f"user:{user_id}", "username", new_username)
+            return True
+        except Exception as e:
+            logger.error(f"更新用户名失败: {str(e)}")
+            return False
+
+    async def update_user_password(self, user_id: str, password_hash: str) -> bool:
+        """更新用户密码哈希值"""
+        try:
+            await self._redis.hset(f"user:{user_id}", "password_hash", password_hash)
+            return True
+        except Exception as e:
+            logger.error(f"更新用户密码失败: {str(e)}")
+            return False
         
-        # 查找并更新所有在这个房间的用户
-        all_user_keys = await self._redis.keys(f"{USER_CURRENT_ROOM_KEY_PREFIX}*")
-        for user_key in all_user_keys:
-            user_room_id = await self._redis.get(user_key)
-            if user_room_id == room_id:
-                user_id = user_key.replace(USER_CURRENT_ROOM_KEY_PREFIX, "")
-                # 清除用户当前房间
-                await self._redis.delete(user_key)
-                # 更新用户状态为在线
-                await self._redis.set(f"{USER_STATUS_KEY_PREFIX}{user_id}", "online")
+    async def update_user_room(self, user_id: str, room_id: str = None) -> bool:
+        """更新用户当前房间"""
+        try:
+            if room_id:
+                await self._redis.hset(f"user:{user_id}", "current_room", room_id)
+            else:
+                # 用户离开房间
+                await self._redis.hdel(f"user:{user_id}", "current_room")
+            return True
+        except Exception as e:
+            logger.error(f"更新用户房间失败: {str(e)}")
+            return False
 
-    async def save_room_code(self, code: str, room_id: str) -> None:
-        """保存邀请码到房间ID的映射"""
-        await self._redis.set(f"{ROOM_CODE_KEY_PREFIX}{code}", room_id)
-        await self._redis.expire(f"{ROOM_CODE_KEY_PREFIX}{code}", 900)
+    async def get_user(self, user_id: str) -> dict:
+        """获取用户所有缓存信息"""
+        try:
+            user_data = await self._redis.hgetall(f"user:{user_id}")
+            return user_data
+        except Exception as e:
+            logger.error(f"获取用户信息失败: {str(e)}")
+            return {}
 
-    async def get_room_by_code(self, code: str) -> Optional[str]:
-        """通过邀请码获取房间ID"""
-        return await self._redis.get(f"{ROOM_CODE_KEY_PREFIX}{code}")
+    async def user_exists(self, user_id: str) -> bool:
+        """检查用户是否存在于缓存"""
+        try:
+            return await self._redis.exists(f"user:{user_id}") > 0
+        except Exception as e:
+            logger.error(f"检查用户存在失败: {str(e)}")
+            return False
 
-    async def add_to_public_rooms(self, room_id: str) -> None:
-        """添加房间到公开房间列表"""
-        await self._redis.sadd(PUBLIC_ROOMS_KEY, room_id)
-
-    async def remove_from_public_rooms(self, room_id: str) -> None:
-        """从公开房间列表移除房间"""
-        await self._redis.srem(PUBLIC_ROOMS_KEY, room_id)
-
-    async def get_public_rooms(self) -> List[str]:
-        """获取所有公开房间ID"""
-        return await self._redis.smembers(PUBLIC_ROOMS_KEY)
-
-    # 用户房间关系
-    async def add_user_to_room(self, user_id: str, room_id: str) -> None:
-        """添加用户到房间，同时设置用户当前房间"""
-        # 设置用户当前房间
-        await self._redis.set(f"{USER_CURRENT_ROOM_KEY_PREFIX}{user_id}", room_id)
-        
-        # 更新房间的users字段 (从房间哈希表中获取当前users，添加新用户后更新)
-        room_data = await self.get_room(room_id)
-        if room_data:
-            # 解析当前users字段
-            current_users = []
-            if "users" in room_data:
-                users_str = room_data["users"]
-                if users_str.startswith("[") and users_str.endswith("]"):
-                    import ast
-                    try:
-                        current_users = ast.literal_eval(users_str)
-                    except:
-                        pass
-            
-            # 添加新用户
-            if user_id not in current_users:
-                current_users.append(user_id)
-                
-            # 更新房间数据
-            await self._redis.hset(f"{ROOM_KEY_PREFIX}{room_id}", "users", str(current_users))
-        
-        # 添加到房间用户集合（用于快速查询）
-        await self._redis.sadd(f"{ROOM_USERS_KEY_PREFIX}{room_id}", user_id)
-
-    async def remove_user_from_room(self, user_id: str, room_id: str) -> None:
-        """从房间移除用户，清除用户当前房间"""
-        # 清除用户当前房间
-        await self._redis.delete(f"{USER_CURRENT_ROOM_KEY_PREFIX}{user_id}")
-        
-        # 更新房间的users字段
-        room_data = await self.get_room(room_id)
-        if room_data and "users" in room_data:
-            # 解析当前users字段
-            current_users = []
-            users_str = room_data["users"]
-            if users_str.startswith("[") and users_str.endswith("]"):
-                import ast
-                try:
-                    current_users = ast.literal_eval(users_str)
-                except:
-                    pass
-            
-            # 移除用户
-            if user_id in current_users:
-                current_users.remove(user_id)
-                
-            # 更新房间数据
-            await self._redis.hset(f"{ROOM_KEY_PREFIX}{room_id}", "users", str(current_users))
-        
-        # 从房间用户集合中移除
-        await self._redis.srem(f"{ROOM_USERS_KEY_PREFIX}{room_id}", user_id)
-
-    async def get_user_current_room(self, user_id: str) -> Optional[str]:
-        """获取用户当前所在房间ID"""
-        return await self._redis.get(f"{USER_CURRENT_ROOM_KEY_PREFIX}{user_id}")
-    
-    async def get_room_users(self, room_id: str) -> Set[str]:
-        """获取房间内所有用户ID"""
-        return await self._redis.smembers(f"{ROOM_USERS_KEY_PREFIX}{room_id}")
-    
-    # 用户信息缓存
-    async def save_user_info(self, user_id: str, user_info: Dict) -> None:
-        """缓存用户基本信息"""
-        await self._redis.hset(f"{USER_INFO_KEY_PREFIX}{user_id}", mapping=user_info)
-        # 设置过期时间（1天）
-        await self._redis.expire(f"{USER_INFO_KEY_PREFIX}{user_id}", 86400)
-    
-    async def get_user_info(self, user_id: str) -> Dict:
-        """获取用户基本信息"""
-        return await self._redis.hgetall(f"{USER_INFO_KEY_PREFIX}{user_id}")
-
-    # 消息相关操作
-    async def save_message(self, room_id: str, message: Dict) -> None:
-        """保存消息到房间消息列表"""
-        await self._redis.lpush(f"{ROOM_MESSAGES_KEY_PREFIX}{room_id}", json.dumps(message))
-        # 限制消息历史记录数量
-        await self._redis.ltrim(f"{ROOM_MESSAGES_KEY_PREFIX}{room_id}", 0, 99)
-
-    async def get_messages(self, room_id: str, limit: int = 50) -> List[Dict]:
-        """获取房间的消息历史"""
-        messages = await self._redis.lrange(f"{ROOM_MESSAGES_KEY_PREFIX}{room_id}", 0, limit - 1)
-        return [json.loads(msg) for msg in messages]
-
-    # 通用操作
-    async def expire(self, key: str, seconds: int) -> None:
-        """设置key的过期时间"""
-        await self._redis.expire(key, seconds)
-
-    async def exists(self, key: str) -> bool:
-        """检查key是否存在"""
-        return await self._redis.exists(key)
+    async def refresh_user_session(self, user_id: str) -> bool:
+        """刷新用户会话TTL"""
+        try:
+            await self._redis.expire(f"user:{user_id}", self.SESSION_TTL)
+            return True
+        except Exception as e:
+            logger.error(f"刷新用户会话TTL失败: {str(e)}")
+            return False
