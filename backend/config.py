@@ -31,8 +31,8 @@ ROOM_VOTES_KEY_PREFIX = "room:%s:votes:%s"  # Hash| 投票记录，%s分别是in
 ROOM_SECRET_VOTES_KEY_PREFIX = "room:%s:secret_votes:%s"  # Hash| 秘密聊天投票
 
 # MongoDB配置
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-MONGO_DB = os.getenv("MONGO_DB", "spy_among_us")
+MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
+MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "spy_among_us")
 
 # 应用配置
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1")

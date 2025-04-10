@@ -17,7 +17,7 @@ To-Do:
 """
 
 import time
-from typing import Optional, Set
+from typing import Optional, Set, Dict, Any
 import redis.asyncio as redis
 from utils.logger_utils import get_logger
 from config import (
@@ -27,43 +27,62 @@ from config import (
     ROOM_READY_USERS_KEY_PREFIX, ROOM_ALIVE_PLAYERS_KEY_PREFIX,
     ROOM_ROLES_KEY_PREFIX, ROOM_MESSAGES_KEY_PREFIX,
     ROOM_SECRET_CHAT_MESSAGES_KEY_PREFIX, ROOM_VOTES_KEY_PREFIX,
-    ROOM_SECRET_VOTES_KEY_PREFIX
+    ROOM_SECRET_VOTES_KEY_PREFIX, JWT_ACCESS_TOKEN_EXPIRE_MINUTES
 )
 
 logger = get_logger(__name__)
 
 class RedisClient:
     def __init__(self):
-        self._redis = None
-        self._pool = None
-        self.SESSION_TTL = 1500  # 25min的TTL设置
-
-    async def connect(self):
-        """连接Redis，使用连接池"""
+        """初始化Redis客户端"""
         try:
-            self._pool = redis.ConnectionPool(
+            self._redis = redis.Redis(
                 host=REDIS_HOST,
                 port=REDIS_PORT,
                 db=REDIS_DB,
                 max_connections=100,  # 最大连接数
                 decode_responses=True
             )
-            self._redis = redis.Redis(connection_pool=self._pool)
-            
-            # 测试连接
-            await self._redis.ping()
-            logger.info(f"成功连接到Redis: {REDIS_HOST}:{REDIS_PORT}")
+            # 设置会话过期时间（与JWT访问令牌过期时间一致）
+            self.SESSION_TTL = JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60  # 转换为秒
+            logger.info("Redis客户端初始化成功")
         except Exception as e:
-            logger.error(f"连接Redis失败: {str(e)}")
+            logger.error(f"Redis客户端初始化失败: {str(e)}")
             raise
 
     async def disconnect(self):
-        """断开Redis连接，关闭redis示例+断开连接"""
+        """断开Redis连接"""
         if self._redis:
             await self._redis.close()
-        if self._pool:
-            await self._pool.disconnect()
+            logger.info("Redis连接已关闭")
 
+    async def check_connection_status(self) -> Dict[str, Any]:
+        """
+        检查Redis连接状态并返回诊断信息
+        
+        Returns:
+            Dict包含连接状态信息
+        """
+        result = {
+            "connected": False,
+            "client_initialized": self._redis is not None,
+            "error": None
+        }
+        
+        try:
+            if self._redis is None:
+                result["error"] = "Redis客户端未初始化"
+                return result
+                
+            # 尝试ping测试
+            await self._redis.ping()
+            result["connected"] = True
+            
+        except Exception as e:
+            result["error"] = str(e)
+            logger.error(f"Redis连接检查失败: {str(e)}")
+            
+        return result
 
     # 所有Redis的基础操作
     async def set(self, key: str, value: str, ex: int = None) -> None:

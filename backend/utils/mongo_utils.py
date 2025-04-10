@@ -12,98 +12,134 @@ Notes:
 To-Do:
     - 修改用户的战绩以及画像
 """
-from typing import Any
 
+from typing import Dict, Optional, Any, List, Union
 from motor.motor_asyncio import AsyncIOMotorClient
-from pymongo.errors import ConnectionFailure
 from utils.logger_utils import get_logger
-from config import MONGO_URI, MONGO_DB
-import time
+from config import MONGODB_URL, MONGODB_DBNAME
 
 logger = get_logger(__name__)
 
 class MongoClient:
     def __init__(self):
-        self._client = None
-        self._db = None
-
-    async def connect(self):
-        """连接MongoDB"""
+        """初始化MongoDB客户端"""
         try:
-            self._client = AsyncIOMotorClient(MONGO_URI)    # 初始化MongoDB连接
-            self._db = self._client[MONGO_DB]   # 初始化db配置
-
-            # 使用ping测试连接
-            await self._client.admin.command('ping')
-            logger.info(f"成功连接到MongoDB: {MONGO_URI}")
-            return True
-        except ConnectionFailure as e:
-            logger.error(f"无法连接到MongoDB: {str(e)}")
-            return False
+            self.client = AsyncIOMotorClient(MONGODB_URL)
+            self.db = self.client[MONGODB_DBNAME]
+            logger.info("MongoDB客户端初始化成功")
         except Exception as e:
-            logger.error(f"MongoDB连接错误: {str(e)}")
+            logger.error(f"MongoDB客户端初始化失败: {str(e)}")
+            raise
+
+    def _convert_sets_to_lists(self, data: Union[Dict, list, set, Any]) -> Union[Dict, list, Any]:
+        """
+        递归地将字典中的set类型转换为list类型
+        
+        Args:
+            data: 需要转换的数据
+            
+        Returns:
+            转换后的数据
+        """
+        if isinstance(data, dict):
+            return {k: self._convert_sets_to_lists(v) for k, v in data.items()}
+        elif isinstance(data, (list, tuple)):
+            return [self._convert_sets_to_lists(item) for item in data]
+        elif isinstance(data, set):
+            return list(data)
+        return data
+
+    def _convert_lists_to_sets(self, data: Union[Dict, list, Any]) -> Union[Dict, list, set, Any]:
+        """
+        递归地将字典中的特定list类型转换回set类型
+        
+        Args:
+            data: 需要转换的数据
+            
+        Returns:
+            转换后的数据
+        """
+        if isinstance(data, dict):
+            # 如果是style_profile中的tags字段，将list转换为set
+            if "style_profile" in data and "tags" in data["style_profile"]:
+                data["style_profile"]["tags"] = set(data["style_profile"]["tags"])
+            return {k: self._convert_lists_to_sets(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._convert_lists_to_sets(item) for item in data]
+        return data
+
+    async def create_user(self, user_data: Dict[str, Any]) -> bool:
+        """
+        创建新用户
+        
+        Args:
+            user_data: 用户数据字典
+            
+        Returns:
+            bool: 是否创建成功
+        """
+        try:
+            # 转换set类型为list类型
+            mongo_data = self._convert_sets_to_lists(user_data)
+            result = await self.db.users.insert_one(mongo_data)
+            return bool(result.inserted_id)
+        except Exception as e:
+            logger.error(f"创建用户失败: {str(e)}")
             return False
+
+    async def find_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """
+        根据用户ID查找用户
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            Optional[Dict]: 用户数据字典，如果未找到则返回None
+        """
+        try:
+            user = await self.db.users.find_one({"id": user_id})
+            if user:
+                # 转换list类型回set类型
+                return self._convert_lists_to_sets(user)
+            return None
+        except Exception as e:
+            logger.error(f"查找用户失败: {str(e)}")
+            return None
+
+    async def find_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        """
+        根据用户名查找用户
+        
+        Args:
+            username: 用户名
+            
+        Returns:
+            Optional[Dict]: 用户数据字典，如果未找到则返回None
+        """
+        try:
+            user = await self.db.users.find_one({"username": username})
+            if user:
+                # 转换list类型回set类型
+                return self._convert_lists_to_sets(user)
+            return None
+        except Exception as e:
+            logger.error(f"根据用户名查找用户失败: {str(e)}")
+            return None
 
     async def disconnect(self):
         """断开MongoDB连接"""
-        if self._client:
-            self._client.close()
+        if self.client:
+            self.client.close()
             logger.info("MongoDB连接已关闭")
-
-    async def create_user(self, user_data):
-        """创建新用户（接收user_service传来的一个完整用户字典）"""
-        if self._db is None:
-            return False
-
-        try:
-            # 确保用户数据包含必要字段
-            required_fields = ["id", "username", "password_hash", "salt"]
-            for field in required_fields:
-                if field not in user_data:
-                    logger.error(f"创建用户缺少必要字段: {field}")
-                    return False
-
-            current_time = int(time.time() * 1000)
-            if "status" not in user_data:
-                user_data["status"] = "online"
-            if "last_active" not in user_data:
-                user_data["last_active"] = current_time
-            if "current_room" not in user_data:
-                user_data["current_room"] = None
-
-            # 初始化用户统计和画像数据
-            if "statistics" not in user_data:
-                user_data["statistics"] = {
-                    "total_games": 0,
-                    "win_rates": {
-                        "civilian": 0.0,
-                        "spy": 0.0
-                    }
-                }
-
-            if "style_profile" not in user_data:
-                user_data["style_profile"] = {
-                    "summary": "",
-                    "tags": [],
-                    "vectors": {}
-                }
-
-            result = await self._db.users.insert_one(user_data)
-            if result.inserted_id:
-                logger.info(f"成功创建用户: {user_data['username']} (ID: {user_data['id']})")
-                return True
-            return False
-        except Exception as e:
-            logger.error(f"创建用户时出错: {str(e)}")
-            return False
 
     async def delete_user(self, user_id):
         """根据用户id来删除用户"""
-        if self._db is None:
+        if self.db is None:
             return False
 
         try:
-            result = await self._db.users.delete_one({"id": user_id})
+            result = await self.db.users.delete_one({"id": user_id})
             if result.deleted_count > 0:
                 logger.info(f"成功删除用户 {user_id}")
                 return True
@@ -116,8 +152,8 @@ class MongoClient:
 
     async def update_username(self, user_id, new_username):
         """更新用户名"""
-        if self._db is None:
-            return False
+        if self.db is None:
+            return False, "MongoDB连接不可用"
 
         try:
             # 先检查新用户名是否已存在
@@ -127,7 +163,7 @@ class MongoClient:
                 return False, "用户名已存在"
 
             # 更新用户名
-            result = await self._db.users.update_one(
+            result = await self.db.users.update_one(
                 {"id": user_id},
                 {"$set": {"username": new_username}}
             )
@@ -146,11 +182,11 @@ class MongoClient:
 
     async def update_password(self, user_id, password_hash, salt):
         """更新用户密码"""
-        if self._db is None:
+        if self.db is None:
             return False
 
         try:
-            result = await self._db.users.update_one(
+            result = await self.db.users.update_one(
                 {"id": user_id},
                 {"$set": {
                     "password_hash": password_hash,
@@ -172,11 +208,11 @@ class MongoClient:
 
     async def update_user_status(self, user_id: str, status: str) -> tuple:
         """仅更新用户状态"""
-        if self._db is None:
+        if self.db is None:
             return False, "MongoDB连接不可用"
 
         try:
-            result = await self._db.users.update_one(
+            result = await self.db.users.update_one(
                 {"id": user_id},
                 {"$set": {"status": status}}
             )
@@ -197,68 +233,31 @@ class MongoClient:
             logger.error(error_msg)
             return False, error_msg
 
-    async def find_user(self, user_id):
-        """通过ID查找用户"""
-        if self._db is None:
-            return None
-
-        try:
-            user = await self._db.users.find_one({"id": user_id})
-            return user
-        except Exception as e:
-            logger.error(f"通过ID查找用户时出错: {str(e)}")
-            return None
-
-    async def find_user_by_username(self, username):
-        """通过用户名查找用户"""
-        if self._db is None:
-            logger.error("MongoDB连接不可用，无法查找用户")
-            return None
-
-        try:
-            user = await self._db.users.find_one({"username": username})
-            return user
-        except Exception as e:
-            logger.error(f"通过用户名查找用户时出错: {str(e)}")
-            return None
-
-    async def check_connection_status(self) -> dict[str, Any]:
-        """检查MongoDB连接状态并返回诊断信息"""
+    async def check_connection_status(self) -> Dict[str, Any]:
+        """
+        检查MongoDB连接状态并返回诊断信息
+        
+        Returns:
+            Dict包含连接状态信息
+        """
         result = {
             "connected": False,
-            "client_initialized": self._client is not None,
-            "db_initialized": self._db is not None,
-            "uri": MONGO_URI,
-            "db_name": MONGO_DB,
+            "client_initialized": self.client is not None,
+            "db_initialized": self.db is not None,
             "error": None
         }
-
+        
         try:
-            if self._client is None:
+            if self.client is None:
                 result["error"] = "MongoDB客户端未初始化"
                 return result
-
-            if self._db is None:
-                result["error"] = "数据库对象未初始化"
-                return result
-
+                
             # 尝试ping测试
-            await self._client.admin.command('ping')
+            await self.client.admin.command('ping')
             result["connected"] = True
-
-            # 检查users集合是否存在
-            collections = await self._db.list_collection_names()
-            result["collections"] = collections
-            result["users_collection_exists"] = "users" in collections
-
-            # 尝试计数用户数量
-            user_count = await self._db.users.count_documents({})
-            result["user_count"] = user_count
-
-            logger.info(f"MongoDB连接状态: {result}")
-            return result
-
+            
         except Exception as e:
             result["error"] = str(e)
-            logger.error(f"检查MongoDB连接时出错: {str(e)}")
-            return result
+            logger.error(f"MongoDB连接检查失败: {str(e)}")
+            
+        return result

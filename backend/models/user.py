@@ -10,6 +10,8 @@ import hashlib
 import secrets
 import string
 
+from config import USER_STATUS_ONLINE
+
 
 class UserStatistics(BaseModel):
     total_games: int = 0
@@ -30,7 +32,7 @@ class User(BaseModel):
     avatar_url: Optional[str] = None  # 头像URL
 
     # 用户状态相关
-    status: str = "online"  # 用户状态: online/in_room/playing
+    status: str = USER_STATUS_ONLINE  # 用户状态: online/in_room/playing
     current_room: Optional[str] = None  # 用户当前所在房间邀请码
 
     # 用户数据
@@ -71,7 +73,7 @@ class User(BaseModel):
             username=username,
             password_hash=password_hash,
             salt=salt,
-            status="online",
+            status=USER_STATUS_ONLINE,
             current_room=None,
             statistics=UserStatistics(),
             style_profile=StyleProfile()

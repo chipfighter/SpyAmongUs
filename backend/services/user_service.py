@@ -1,213 +1,283 @@
 """
-service: user_service
+用户服务层
+
+Notes:
+    实现一切和用户直接相关的业务逻辑操作
+    返回格式统一: Dict[str, Any]，包含以下字段：
+    - success: bool，操作是否成功
+    - message: str，操作结果消息
+    - data: Optional[Dict]，返回的数据（如果有）
 """
-from typing import Dict, Optional, List, Tuple
-import uuid
+
+from typing import Dict, Any
+
 from models.user import User
-from utils.redis_utils import RedisClient
 from utils.mongo_utils import MongoClient
+from utils.redis_utils import RedisClient
+from services.auth_service import AuthService
 from utils.logger_utils import get_logger
 from config import (
-    USER_STATUS_KEY_PREFIX, 
-    USER_ONLINE_SET_KEY,
-    USER_STATUS_ONLINE, 
-    USER_STATUS_OFFLINE,
+    USER_STATUS_ONLINE,
     USER_STATUS_IN_ROOM,
     USER_STATUS_PLAYING
 )
 
-
 logger = get_logger(__name__)
 
 class UserService:
-    def __init__(self, redis_client: RedisClient, mongo_client: MongoClient = None):
-        self.redis = redis_client
-        self.mongo = mongo_client
-        # 存储用户WebSocket连接
-        self.user_connections: Dict[str, any] = {}
-
-    def register_connection(self, user_id: str, websocket: any) -> None:
-        """注册用户WebSocket连接"""
-        self.user_connections[user_id] = websocket
-
-    def unregister_connection(self, user_id: str) -> None:
-        """取消注册用户WebSocket连接"""
-        if user_id in self.user_connections:
-            del self.user_connections[user_id]
-
-    def get_connection(self, user_id: str) -> Optional[any]:
-        """获取用户的WebSocket连接"""
-        return self.user_connections.get(user_id)
-
-    async def create_temp_user(self, user_id: str, username: str) -> User:
-        """创建临时用户"""
-        user = User.create_temp_user(user_id, username)
+    def __init__(self, redis_client: RedisClient, mongo_client: MongoClient):
+        """
+        初始化用户服务
         
-        # 如果MongoDB可用，保存用户到数据库
-        if self.mongo is not None and self.mongo._db is not None:
-            # 检查用户是否已存在
-            existing_user = await self.mongo.find_user(user_id)
-            if not existing_user:
-                # 创建新用户
-                await self.mongo.create_user(user.dict())
-        
-        return user
+        Args:
+            redis_client: Redis客户端实例
+            mongo_client: MongoDB客户端实例
+        """
+        self.mongo_client = mongo_client
+        self.redis_client = redis_client
+        self.auth_service = AuthService()
+        logger.info("用户服务已初始化")
 
-    async def create_user(self, username: str, password: str) -> Tuple[bool, Optional[User], str]:
-        """创建带密码的新用户"""
-        if self.mongo is None or self.mongo._db is None:
-            return False, None, "MongoDB未连接"
+    async def register_user(self, username: str, password: str) -> Dict[str, Any]:
+        """
+        注册新用户
+        
+        Args:
+            username: 用户名
+            password: 密码
             
-        # 检查用户名是否已存在
-        existing_user = await self.mongo.find_user_by_username(username)
-        if existing_user:
-            return False, None, "用户名已存在"
-            
-        # 创建新用户
-        user = User.create_user(username, password)
-        
-        # 保存到数据库 - 确保包含所有必要字段
-        user_dict = {
-            "id": user.id,
-            "username": user.username,
-            "password_hash": user.password_hash,  # 确保保存密码哈希
-            "salt": user.salt,                    # 确保保存盐值
-            "avatar_url": user.avatar_url
-        }
-        
-        result = await self.mongo.create_user(user_dict)
-        if not result:
-            return False, None, "创建用户失败"
-            
-        return True, user, "用户创建成功"
-
-    async def get_user_by_id(self, user_id: str) -> Optional[User]:
-        """通过ID获取用户"""
-        if self.mongo is None or self.mongo._db is None:
-            return None
-            
-        user_data = await self.mongo.find_user(user_id)
-        if user_data:
-            return User(**user_data)
-        return None
-
-    async def get_user_by_username(self, username: str) -> Optional[User]:
-        """通过用户名获取用户"""
-        if self.mongo is None or self.mongo._db is None:
-            return None
-            
-        user_data = await self.mongo.find_user_by_username(username)
-        if user_data:
-            return User(**user_data)
-        return None
-
-    async def login_user(self, username: str) -> Optional[User]:
-        """用户登录（简化版，仅使用用户名）"""
-        # 检查用户是否存在
-        user = None
-        if self.mongo is not None and self.mongo._db is not None:
-            user_data = await self.mongo.find_user_by_username(username)
-            if user_data:
-                user = User(**user_data)
-        
-        # 如果用户不存在，创建新用户
-        if not user:
-            user_id = f"usr_{uuid.uuid4().hex[:12]}"
-            user = await self.create_temp_user(user_id, username)
-        
-        # 更新用户状态为在线
-        await self.set_user_online(user.id)
-        
-        return user
-
-    async def login_with_password(self, username: str, password: str) -> Tuple[bool, Optional[User], str]:
-        """使用密码登录"""
+        Returns:
+            Dict包含注册结果和相关信息
+        """
         try:
-            # 检查MongoDB连接
-            if self.mongo is None or self.mongo._db is None:
-                logger.error("MongoDB未连接，登录失败")
-                return False, None, "MongoDB未连接"
-                
-            # 查找用户（使用mongodb_utils根据用户名称来寻找对应的salt）
-            user_data = await self.mongo.find_user_by_username(username)
-            if not user_data:
-                logger.warn(f"用户不存在: {username}")
-                return False, None, "用户不存在"
+            # 检查用户名是否已存在
+            existing_user = await self.mongo_client.find_user_by_username(username)
+            if existing_user:
+                return {
+                    "success": False,
+                    "message": "用户名已存在"
+                }
+
+            # 创建用户对象
+            user = User.create_user(username, password)
             
-            # 实例化用户对象
-            user = User(**user_data)
+            # 获取完整数据用于MongoDB存储（包含敏感信息，但不包括不需要的字段）
+            complete_user_data = {
+                **user.dict(),
+                "password_hash": user.password_hash,
+                "salt": user.salt
+            }
             
-            # 然后再调用user下的function来验证密码
-            if not user.verify_password(password):
-                logger.warn(f"密码验证失败: {username}")
-                return False, None, "密码错误"
+            # 确保移除MongoDB不需要的字段
+            if "current_room" in complete_user_data:
+                complete_user_data.pop("current_room")
             
-            # 更新用户状态为在线
-            await self.set_user_online(user.id)
-            
-            logger.info(f"用户登录成功: {username}")
-            return True, user, "登录成功"
-            
+            # 过滤敏感数据用于Redis和返回客户端
+            user_dict = user.dict()
+
+            # 保存用户数据到MongoDB（包含敏感信息）
+            success = await self.mongo_client.create_user(complete_user_data)
+            if success:
+                # 缓存用户数据到Redis（不包含敏感信息）
+                await self.redis_client.cache_user(user.id, user_dict)
+
+                # 生成访问令牌和刷新令牌
+                access_token, refresh_token = self.auth_service.create_tokens(user.id, user.username)
+
+                # 返回用户数据（不包含敏感信息）
+                user_dict["access_token"] = access_token
+                user_dict["refresh_token"] = refresh_token
+
+                return {
+                    "success": True,
+                    "message": "注册成功",
+                    "data": {
+                        "user_id": user.id,
+                        "user_data": user_dict
+                    }
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": "注册失败，请稍后重试"
+                }
+
         except Exception as e:
-            logger.error(f"登录过程出错: {str(e)}")
-            return False, None, f"登录失败: {str(e)}"
+            logger.error(f"注册用户时发生错误: {str(e)}")
+            return {
+                "success": False,
+                "message": "注册过程中发生错误"
+            }
 
-    async def update_user_status(self, user_id: str, status: str) -> None:
-        """更新用户状态"""
-        logger.info(f"更新用户状态：用户ID={user_id}, 状态={status}")
-        
-        # 更新Redis中的状态
-        await self.redis.set(f"{USER_STATUS_KEY_PREFIX}{user_id}", status)
-        
-        # 根据状态管理在线用户集合
-        if status == USER_STATUS_ONLINE:
-            await self.redis.sadd(USER_ONLINE_SET_KEY, user_id)
-        elif status == USER_STATUS_OFFLINE:
-            await self.redis.srem(USER_ONLINE_SET_KEY, user_id)
+    async def login(self, username: str, password: str) -> Dict[str, Any]:
+        """用户登录"""
+        try:
+            # 查找用户
+            user_data = await self.mongo_client.find_user_by_username(username)
+            if not user_data:
+                return {
+                    "success": False,
+                    "message": "用户不存在"
+                }
 
-    async def set_user_online(self, user_id: str) -> None:
-        """设置用户为在线状态"""
-        await self.update_user_status(user_id, USER_STATUS_ONLINE)
-        logger.info(f"用户 {user_id} 已上线")
+            # 创建User对象并验证密码
+            user = User(**user_data)
+            if not user.verify_password(password):
+                return {
+                    "success": False,
+                    "message": "密码错误"
+                }
 
-    async def set_user_offline(self, user_id: str) -> None:
-        """设置用户为离线状态"""
-        await self.update_user_status(user_id, USER_STATUS_OFFLINE)
-        logger.info(f"用户 {user_id} 已离线")
-
-    async def set_user_in_room(self, user_id: str, room_id: str) -> None:
-        """设置用户为在房间状态"""
-        await self.update_user_status(user_id, USER_STATUS_IN_ROOM)
-        logger.info(f"用户 {user_id} 已进入房间 {room_id}")
-
-    async def set_user_playing(self, user_id: str) -> None:
-        """设置用户为游戏中状态"""
-        await self.update_user_status(user_id, USER_STATUS_PLAYING)
-        logger.info(f"用户 {user_id} 已开始游戏")
-
-    async def get_online_users(self) -> List[str]:
-        """获取所有在线用户ID列表"""
-        return await self.redis.smembers(USER_ONLINE_SET_KEY)
-
-    async def is_user_online(self, user_id: str) -> bool:
-        """检查用户是否在线"""
-        return await self.redis.sismember(USER_ONLINE_SET_KEY, user_id)
-
-    async def get_user_status(self, user_id: str) -> str:
-        """获取用户状态"""
-        status = await self.redis.get(f"{USER_STATUS_KEY_PREFIX}{user_id}")
-        return status or USER_STATUS_OFFLINE
-
-    async def update_user_room(self, user_id: str, room_id: Optional[str]) -> None:
-        """更新用户当前所在房间"""
-        # 更新Redis中的房间关系
-        if room_id:
-            await self.redis.set(f"user:current_room:{user_id}", room_id)
-            await self.redis.add_user_to_room(user_id, room_id)
-            # 更新用户状态为在房间
-            await self.set_user_in_room(user_id, room_id)
-        else:
-            # 用户离开房间
-            await self.redis.delete(f"user:current_room:{user_id}")
             # 更新用户状态为在线
-            await self.set_user_online(user_id)
+            user.status = USER_STATUS_ONLINE
+            await self.mongo_client.update_user_status(user.id, user.status)
+
+            # 更新Redis缓存（过滤敏感信息）
+            user_dict = user.dict()  # 这里会移除敏感字段
+            await self.redis_client.cache_user(user.id, user_dict)
+
+            # 生成新的访问令牌和刷新令牌
+            access_token, refresh_token = self.auth_service.create_tokens(user.id, user.username)
+
+            # 返回用户数据（不包含敏感信息）
+            user_dict["access_token"] = access_token
+            user_dict["refresh_token"] = refresh_token
+
+            return {
+                "success": True,
+                "message": "登录成功",
+                "data": user_dict
+            }
+
+        except Exception as e:
+            logger.error(f"用户登录失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"登录失败: {str(e)}"
+            }
+
+    async def logout(self, user_id: str) -> Dict[str, Any]:
+        """用户登出"""
+        try:
+            # 更新用户状态
+            success, message = await self.mongo_client.update_user_status(user_id, "offline")
+            if not success:
+                return {
+                    "success": False,
+                    "message": message
+                }
+
+            # 从Redis中删除用户缓存
+            await self.redis_client.delete_user_cache(user_id)
+
+            return {
+                "success": True,
+                "message": "登出成功"
+            }
+
+        except Exception as e:
+            logger.error(f"用户登出失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"登出失败: {str(e)}"
+            }
+
+    async def update_user_status(self, user_id: str, status: str) -> Dict[str, Any]:
+        """
+        更新用户状态
+        
+        Args:
+            user_id: 用户ID
+            status: 新状态 (online/in_room/playing)
+        """
+        try:
+            # 验证状态值
+            valid_statuses = [USER_STATUS_ONLINE, USER_STATUS_IN_ROOM, USER_STATUS_PLAYING]
+            if status not in valid_statuses and status != "offline":
+                return {
+                    "success": False,
+                    "message": "无效的状态值"
+                }
+
+            # 更新MongoDB中的状态
+            success, message = await self.mongo_client.update_user_status(user_id, status)
+            if not success:
+                return {
+                    "success": False,
+                    "message": message
+                }
+
+            # 更新Redis缓存
+            user_data = await self.mongo_client.find_user(user_id)
+            if user_data:
+                await self.redis_client.cache_user(user_id, user_data)
+
+            return {
+                "success": True,
+                "message": "状态更新成功"
+            }
+
+        except Exception as e:
+            logger.error(f"更新用户状态失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"更新失败: {str(e)}"
+            }
+
+    async def get_user_info(self, user_id: str) -> Dict[str, Any]:
+        """获取用户信息"""
+        try:
+            # 先从Redis缓存中获取
+            user_data = await self.redis_client.get_user(user_id)
+            if not user_data:
+                # 如果缓存中没有，从MongoDB获取
+                user_data = await self.mongo_client.find_user(user_id)
+                if not user_data:
+                    return {
+                        "success": False,
+                        "message": "用户不存在"
+                    }
+                    
+                # 更新缓存
+                await self.redis_client.cache_user(user_id, user_data)
+
+            # 返回用户数据（调用user.dict()去除敏感信息）
+            user = User(**user_data)
+            return {
+                "success": True,
+                "message": "获取成功",
+                "data": user.dict()
+            }
+
+        except Exception as e:
+            logger.error(f"获取用户信息失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"获取失败: {str(e)}"
+            }
+
+    async def refresh_token(self, refresh_token: str) -> Dict[str, Any]:
+        """刷新访问令牌"""
+        try:
+            # 验证刷新令牌
+            new_access_token = self.auth_service.refresh_access_token(refresh_token)
+            if not new_access_token:
+                return {
+                    "success": False,
+                    "message": "刷新令牌无效或已过期"
+                }
+
+            return {
+                "success": True,
+                "message": "令牌刷新成功",
+                "data": {
+                    "access_token": new_access_token
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"刷新令牌失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"刷新失败: {str(e)}"
+            }
