@@ -1,58 +1,46 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { userStore } from '../store/user'
-
-const routes = [
-  {
-    path: '/',
-    name: 'Home',
-    component: () => import('../views/Home.vue'),
-    meta: { requiresAuth: true }
-  },
-  {
-    path: '/login',
-    name: 'Login',
-    component: () => import('../views/Login.vue')
-  },
-  {
-    path: '/register',
-    name: 'Register',
-    component: () => import('../views/Register.vue')
-  },
-  {
-    path: '/lobby',
-    name: 'Lobby',
-    component: () => import('../views/Home.vue'),
-    meta: { requiresAuth: true }
-  },
-  {
-    path: '/room/:id',
-    name: 'Room',
-    component: () => import('../views/Room.vue'),
-    props: true,
-    meta: { requiresAuth: true }
-  }
-]
 
 const router = createRouter({
-  history: createWebHistory(),
-  routes
+  history: createWebHistory(import.meta.env.BASE_URL),
+  routes: [
+    {
+      path: '/',
+      redirect: '/login'
+    },
+    {
+      path: '/login',
+      name: 'login',
+      component: () => import('../views/LoginView.vue'),
+      meta: { requiresAuth: false }
+    },
+    {
+      path: '/register',
+      name: 'register',
+      component: () => import('../views/RegisterView.vue'),
+      meta: { requiresAuth: false }
+    },
+    {
+      path: '/lobby',
+      name: 'lobby',
+      component: () => import('../views/LobbyView.vue'),
+      meta: { requiresAuth: true }
+    }
+  ]
 })
 
-// 全局路由守卫，检查登录状态
+// 导航守卫
 router.beforeEach((to, from, next) => {
-  // 检查是否登录
-  const isLoggedIn = userStore.loggedIn && userStore.user && userStore.user.id;
+  const requiresAuth = to.matched.some(record => record.meta.requiresAuth)
+  const token = localStorage.getItem('accessToken')
   
-  // 如果需要登录但未登录，重定向到登录页
-  if (to.meta.requiresAuth && !isLoggedIn) {
-    next('/login');
+  if (requiresAuth && !token) {
+    // 需要登录但未登录，重定向到登录页
+    next('/login')
+  } else if ((to.path === '/login' || to.path === '/register') && token) {
+    // 已登录用户尝试访问登录或注册页，重定向到大厅
+    next('/lobby')
   } else {
-    // 如果已登录且尝试访问登录或注册页，则重定向到大厅
-    if (isLoggedIn && (to.path === '/login' || to.path === '/register')) {
-      next('/lobby');
-    } else {
-      next();
-    }
+    next()
   }
 })
 

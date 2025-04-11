@@ -1,8 +1,10 @@
 """
-auth_service
+services: auth_service
+
+Description:
+    JWT的鉴权相关的操作，实现双token机制
 
 Notes:
-    JWT的鉴权相关的操作，实现双token机制
     - Access Token: 用于API访问
     - Refresh Token: 用于刷新Access Token
 """

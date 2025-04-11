@@ -31,7 +31,7 @@ class User(BaseModel):
     salt: Optional[str] = None  # 密码盐值
     avatar_url: Optional[str] = None  # 头像URL
 
-    # 用户状态相关
+    # 用户状态相关（仅redis存储）
     status: str = USER_STATUS_ONLINE  # 用户状态: online/in_room/playing
     current_room: Optional[str] = None  # 用户当前所在房间邀请码
 

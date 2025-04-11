@@ -6,12 +6,11 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from typing import Optional, Dict, List, Set
+from typing import Optional, Dict
 import time
 import asyncio
 from pydantic import BaseModel
 
-# 移除 RoomService 导入
 from services.user_service import UserService
 from services.message_service import MessageService
 from services.auth_service import AuthService
@@ -41,37 +40,6 @@ class UserLogin(BaseModel):
 class TokenRefresh(BaseModel):
     """Token刷新模型"""
     refresh_token: str
-
-# WebSocket连接管理
-class ConnectionManager:
-    """管理所有与服务器的WebSocket连接"""
-    
-    def __init__(self):
-        """初始化连接管理器"""
-        # 存储所有活跃的WebSocket连接: {user_id: websocket}
-        self.active_connections: Dict[str, WebSocket] = {}
-    
-    async def connect(self, user_id: str, websocket: WebSocket):
-        """添加WebSocket连接到管理器"""
-        await websocket.accept()
-        self.active_connections[user_id] = websocket
-        logger.info(f"用户 {user_id} 连接成功")
-    
-    def disconnect(self, user_id: str):
-        """断开并移除用户WebSocket连接"""
-        if user_id in self.active_connections:
-            del self.active_connections[user_id]
-            logger.info(f"用户 {user_id} 断开连接")
-    
-    async def send_json(self, user_id: str, message: dict):
-        """向特定用户发送JSON消息"""
-        if user_id in self.active_connections:
-            await self.active_connections[user_id].send_json(message)
-            
-    def disconnect_all(self):
-        """断开所有连接"""
-        self.active_connections = {}
-        logger.info("所有WebSocket连接已断开")
 
 # WebSocket消息类型常量
 MESSAGE_TYPES = {
@@ -105,7 +73,6 @@ app.add_middleware(
 # 初始化服务和客户端
 redis_client = RedisClient()
 mongo_client = MongoClient()
-connection_manager = ConnectionManager()
 user_service = UserService(redis_client, mongo_client)
 message_service = MessageService(redis_client)
 auth_service = AuthService()
@@ -178,10 +145,7 @@ async def startup_event():
 async def shutdown_event():
     """应用关闭时清理资源"""
     logger.info("应用关闭，开始清理资源...")
-    
-    # 断开所有WebSocket连接
-    connection_manager.disconnect_all()
-    
+
     # 关闭数据库连接
     await redis_client.disconnect()
     await mongo_client.disconnect()
@@ -238,7 +202,7 @@ async def read_root():
 async def register(user_data: Dict[str, str]):
     """用户注册API"""
     try:
-        result = await user_service.register_user(user_data["username"], user_data["password"])
+        result = await user_service.register(user_data["username"], user_data["password"])
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
         return result

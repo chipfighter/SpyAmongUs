@@ -1,16 +1,20 @@
 """
 utils: redis utils
 
-Notes:
+Description:
     仅仅提供关于房间、用户信息的基本增、删、改、查操作，具体的逻辑全部放到service层处理
+
+Notes:
     同时，尽可能保持mongodb的同步方法，先修改redis再修改磁盘mongodb
     - 关于Redis 连接、断开、检查
     - Redis的一系列基础操作
-    - 将用户读入redis
-    - 根据用户id删除用户
-    - 更新用户名、更新用户密码、更新用户状态、更新用户当前房间
-    - 根据id来查找用户所有信息
     - 检查用户是否存在、TTL刷新操作
+    用户：
+        - 将用户读入redis
+        - 根据用户id删除用户
+        - 更新用户名、更新用户头像、更新用户状态、更新用户当前房间
+        - 根据id来查找用户所有信息
+    房间：
 
 To-Do:
     - 修改用户的战绩以及画像
@@ -132,7 +136,12 @@ class RedisClient:
             return False
 
     async def delete_user_cache(self, user_id: str) -> bool:
-        """删除用户的所有缓存数据"""
+        """
+        删除用户的所有缓存数据
+
+        Notes:
+            这里的删除是删除redis缓存，即 用户退出系统/超过掉线时间 的时候执行
+        """
         try:
             await self._redis.delete(f"user:{user_id}")
             return True
@@ -158,26 +167,24 @@ class RedisClient:
             logger.error(f"更新用户名失败: {str(e)}")
             return False
 
-    async def update_user_password(self, user_id: str, password_hash: str) -> bool:
-        """更新用户密码哈希值"""
+    async def update_avatar(self, user_id: str, new_avatar_url: str) -> bool:
+        """更新用户新头像"""
         try:
-            await self._redis.hset(f"user:{user_id}", "password_hash", password_hash)
+            await self._redis.hset(f"user:{user_id}", "avatar_url", new_avatar_url)
             return True
         except Exception as e:
-            logger.error(f"更新用户密码失败: {str(e)}")
+            logger.error(f"更新用户头像失败: {str(e)}")
             return False
-        
-    async def update_user_room(self, user_id: str, room_id: str = None) -> bool:
-        """更新用户当前房间"""
+
+    async def update_current_room(self, user_id: str, room_id: str = None) -> bool:
+        """更新用户当前所在房间"""
         try:
-            if room_id:
-                await self._redis.hset(f"user:{user_id}", "current_room", room_id)
-            else:
-                # 用户离开房间
-                await self._redis.hdel(f"user:{user_id}", "current_room")
+            # 如果room_id为None，表示用户离开房间
+            value = room_id if room_id is not None else ""
+            await self._redis.hset(f"user:{user_id}", "current_room", value)
             return True
         except Exception as e:
-            logger.error(f"更新用户房间失败: {str(e)}")
+            logger.error(f"更新用户当前房间失败: {str(e)}")
             return False
 
     async def get_user(self, user_id: str) -> dict:
@@ -190,7 +197,11 @@ class RedisClient:
             return {}
 
     async def user_exists(self, user_id: str) -> bool:
-        """检查用户是否存在于缓存"""
+        """检查用户是否存在于缓存
+
+        Notes:
+            这个功能主要是给前端断线以后重新进行的调用
+        """
         try:
             return await self._redis.exists(f"user:{user_id}") > 0
         except Exception as e:

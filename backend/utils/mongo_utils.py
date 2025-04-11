@@ -4,10 +4,11 @@ MongoDB工具类
 Notes:
     类似持久层，提供service函数接口，系统仅有一种需要保存的持久数据（用户数据）。
     - 关于MongoDB 连接、断开、检查
+    - MongoDB与model的格式转化
     - 增加新用户
     - 根据用户id删除用户
-    - 更新用户名、更新用户密码、更新用户状态
-    - 根据id来查找用户所有信息
+    - 更新用户名、更新用户密码、更新用户头像
+    - 根据id来查找用户、根据用户名查找用户
 
 To-Do:
     - 修改用户的战绩以及画像
@@ -87,54 +88,13 @@ class MongoClient:
             logger.error(f"创建用户失败: {str(e)}")
             return False
 
-    async def find_user(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """
-        根据用户ID查找用户
-        
-        Args:
-            user_id: 用户ID
-            
-        Returns:
-            Optional[Dict]: 用户数据字典，如果未找到则返回None
-        """
-        try:
-            user = await self.db.users.find_one({"id": user_id})
-            if user:
-                # 转换list类型回set类型
-                return self._convert_lists_to_sets(user)
-            return None
-        except Exception as e:
-            logger.error(f"查找用户失败: {str(e)}")
-            return None
-
-    async def find_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
-        """
-        根据用户名查找用户
-        
-        Args:
-            username: 用户名
-            
-        Returns:
-            Optional[Dict]: 用户数据字典，如果未找到则返回None
-        """
-        try:
-            user = await self.db.users.find_one({"username": username})
-            if user:
-                # 转换list类型回set类型
-                return self._convert_lists_to_sets(user)
-            return None
-        except Exception as e:
-            logger.error(f"根据用户名查找用户失败: {str(e)}")
-            return None
-
-    async def disconnect(self):
-        """断开MongoDB连接"""
-        if self.client:
-            self.client.close()
-            logger.info("MongoDB连接已关闭")
-
     async def delete_user(self, user_id):
-        """根据用户id来删除用户"""
+        """
+        根据用户id来删除用户
+
+        Notes:
+            注意这里的删除是将用户注销！
+        """
         if self.db is None:
             return False
 
@@ -206,37 +166,83 @@ class MongoClient:
             logger.error(f"更新密码时出错: {str(e)}")
             return False, f"更新失败: {str(e)}"
 
-    async def update_user_status(self, user_id: str, status: str) -> tuple:
-        """仅更新用户状态"""
+    async def update_avatar(self, user_id: str, avatar_url: str) -> tuple:
+        """更新用户头像"""
         if self.db is None:
             return False, "MongoDB连接不可用"
 
         try:
             result = await self.db.users.update_one(
                 {"id": user_id},
-                {"$set": {"status": status}}
+                {"$set": {"avatar_url": avatar_url}}
             )
 
             if result.matched_count == 0:
-                logger.warning(f"未找到用户 {user_id}，无法更新状态")
+                logger.warning(f"未找到用户 {user_id}，无法更新头像")
                 return False, "用户不存在"
 
             if result.modified_count > 0:
-                logger.info(f"用户 {user_id} 状态已更新为 {status}")
-                return True, "状态已更新"
+                logger.info(f"用户 {user_id} 头像已更新")
+                return True, "头像已更新"
             else:
-                logger.info(f"用户 {user_id} 状态未变化，仍为 {status}")
-                return True, "状态未变化"
+                logger.info(f"用户 {user_id} 头像未变化")
+                return True, "头像未变化"
 
         except Exception as e:
-            error_msg = f"更新用户状态时出错: {str(e)}"
+            error_msg = f"更新用户头像时出错: {str(e)}"
             logger.error(error_msg)
             return False, error_msg
+
+    async def find_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """
+        根据用户ID查找用户
+
+        Args:
+            user_id: 用户ID
+
+        Returns:
+            Optional[Dict]: 用户数据字典，如果未找到则返回None
+        """
+        try:
+            user = await self.db.users.find_one({"id": user_id})
+            if user:
+                # 转换list类型回set类型
+                return self._convert_lists_to_sets(user)
+            return None
+        except Exception as e:
+            logger.error(f"查找用户失败: {str(e)}")
+            return None
+
+    async def find_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        """
+        根据用户名查找用户
+
+        Args:
+            username: 用户名
+
+        Returns:
+            Optional[Dict]: 用户数据字典，如果未找到则返回None
+        """
+        try:
+            user = await self.db.users.find_one({"username": username})
+            if user:
+                # 转换list类型回set类型
+                return self._convert_lists_to_sets(user)
+            return None
+        except Exception as e:
+            logger.error(f"根据用户名查找用户失败: {str(e)}")
+            return None
+
+    async def disconnect(self):
+        """断开MongoDB连接"""
+        if self.client:
+            self.client.close()
+            logger.info("MongoDB连接已关闭")
 
     async def check_connection_status(self) -> Dict[str, Any]:
         """
         检查MongoDB连接状态并返回诊断信息
-        
+
         Returns:
             Dict包含连接状态信息
         """
@@ -246,18 +252,18 @@ class MongoClient:
             "db_initialized": self.db is not None,
             "error": None
         }
-        
+
         try:
             if self.client is None:
                 result["error"] = "MongoDB客户端未初始化"
                 return result
-                
+
             # 尝试ping测试
             await self.client.admin.command('ping')
             result["connected"] = True
-            
+
         except Exception as e:
             result["error"] = str(e)
             logger.error(f"MongoDB连接检查失败: {str(e)}")
-            
+
         return result

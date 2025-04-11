@@ -1,12 +1,21 @@
 """
-用户服务层
+services: user_service
+
+Description:
+    实现一切和用户直接相关的业务逻辑操作
 
 Notes:
-    实现一切和用户直接相关的业务逻辑操作
-    返回格式统一: Dict[str, Any]，包含以下字段：
+    返回格式统一:
+    Dict[str, Any]，包含以下字段：
     - success: bool，操作是否成功
     - message: str，操作结果消息
     - data: Optional[Dict]，返回的数据（如果有）
+
+    主要功能：
+    -
+
+To-Do:
+
 """
 
 from typing import Dict, Any
@@ -38,16 +47,18 @@ class UserService:
         self.auth_service = AuthService()
         logger.info("用户服务已初始化")
 
-    async def register_user(self, username: str, password: str) -> Dict[str, Any]:
+    async def register(self, username: str, password: str) -> Dict[str, Any]:
         """
         注册新用户
-        
+
+        Notes:
+            针对MongoDB和Redis存储的数据需要做区分
+            MongoDB不保存时效性高，持久性低的数据
+            Redis不保存敏感信息
+
         Args:
             username: 用户名
             password: 密码
-            
-        Returns:
-            Dict包含注册结果和相关信息
         """
         try:
             # 检查用户名是否已存在
@@ -71,6 +82,7 @@ class UserService:
             # 确保移除MongoDB不需要的字段
             if "current_room" in complete_user_data:
                 complete_user_data.pop("current_room")
+                complete_user_data.pop("status")
             
             # 过滤敏感数据用于Redis和返回客户端
             user_dict = user.dict()
@@ -159,13 +171,6 @@ class UserService:
     async def logout(self, user_id: str) -> Dict[str, Any]:
         """用户登出"""
         try:
-            # 更新用户状态
-            success, message = await self.mongo_client.update_user_status(user_id, "offline")
-            if not success:
-                return {
-                    "success": False,
-                    "message": message
-                }
 
             # 从Redis中删除用户缓存
             await self.redis_client.delete_user_cache(user_id)
@@ -193,14 +198,56 @@ class UserService:
         try:
             # 验证状态值
             valid_statuses = [USER_STATUS_ONLINE, USER_STATUS_IN_ROOM, USER_STATUS_PLAYING]
-            if status not in valid_statuses and status != "offline":
+            if status not in valid_statuses:
                 return {
                     "success": False,
                     "message": "无效的状态值"
                 }
 
-            # 更新MongoDB中的状态
-            success, message = await self.mongo_client.update_user_status(user_id, status)
+            # 更新Redis缓存
+            user_data = await self.mongo_client.find_user(user_id)
+            if user_data:
+                await self.redis_client.update_user_status(user_id, status)
+
+            return {
+                "success": True,
+                "message": "状态更新成功"
+            }
+
+        except Exception as e:
+            logger.error(f"更新用户状态失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"更新失败: {str(e)}"
+            }
+
+    async def update_current_room(self, user_id: str, room_id: str = None) -> Dict[str, Any]:
+        """更新用户当前所在房间"""
+        try:
+            # 只在Redis中更新当前房间状态，不持久化到MongoDB
+            success = await self.redis_client.update_current_room(user_id, room_id)
+            if not success:
+                return {
+                    "success": False,
+                    "message": "更新房间状态失败"
+                }
+
+            return {
+                "success": True,
+                "message": "房间状态已更新"
+            }
+        except Exception as e:
+            logger.error(f"更新用户房间状态失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"更新失败: {str(e)}"
+            }
+
+    async def update_username(self, user_id: str, new_username: str) -> Dict[str, Any]:
+        """更新用户名（检查重复）"""
+        try:
+            # 在MongoDB中更新用户名（已内置重复检查）
+            success, message = await self.mongo_client.update_username(user_id, new_username)
             if not success:
                 return {
                     "success": False,
@@ -214,11 +261,75 @@ class UserService:
 
             return {
                 "success": True,
-                "message": "状态更新成功"
+                "message": "用户名已更新"
+            }
+        except Exception as e:
+            logger.error(f"更新用户名失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"更新失败: {str(e)}"
             }
 
+    async def update_password(self, user_id: str, old_password: str, new_password: str) -> Dict[str, Any]:
+        """更新用户密码"""
+        try:
+            # 先验证当前密码
+            user_data = await self.mongo_client.find_user(user_id)
+            if not user_data:
+                return {
+                    "success": False,
+                    "message": "用户不存在"
+                }
+
+            user = User(**user_data)
+            if not user.verify_password(old_password):
+                return {
+                    "success": False,
+                    "message": "当前密码错误"
+                }
+
+            # 生成新的密码哈希和盐值
+            new_password_hash, new_salt = User.hash_password(new_password)
+
+            # 更新MongoDB中的密码
+            success, message = await self.mongo_client.update_password(user_id, new_password_hash, new_salt)
+            if not success:
+                return {
+                    "success": False,
+                    "message": message
+                }
+
+            return {
+                "success": True,
+                "message": "密码已更新"
+            }
         except Exception as e:
-            logger.error(f"更新用户状态失败: {str(e)}")
+            logger.error(f"更新密码失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"更新失败: {str(e)}"
+            }
+
+    async def update_avatar(self, user_id: str, avatar_url: str) -> Dict[str, Any]:
+        """更新用户头像"""
+        try:
+            # 更新MongoDB中的头像
+            success, message = await self.mongo_client.update_avatar(user_id, avatar_url)
+            if not success:
+                return {
+                    "success": False,
+                    "message": message
+                }
+
+            # 更新Redis缓存
+            await self.redis_client.update_avatar(user_id, avatar_url)
+
+            return {
+                "success": True,
+                "message": "头像已更新"
+            }
+        except Exception as e:
+            logger.error(f"更新用户头像失败: {str(e)}")
             return {
                 "success": False,
                 "message": f"更新失败: {str(e)}"
