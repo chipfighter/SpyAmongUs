@@ -121,7 +121,7 @@ class RedisClient:
         return await self._redis.sismember(key, value)
 
 
-    # 用户相关的操作
+    # 用户相关
     async def cache_user(self, user_id: str, user_data: dict) -> bool:
         """将用户数据存入Redis缓存"""
         try:
@@ -216,3 +216,7 @@ class RedisClient:
         except Exception as e:
             logger.error(f"刷新用户会话TTL失败: {str(e)}")
             return False
+
+
+    # 房间相关
+    # async def create_room(self, user_id: str, room_name: str) -> dict:

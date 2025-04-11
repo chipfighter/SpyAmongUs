@@ -10,6 +10,7 @@ from typing import Optional, Dict
 import time
 import asyncio
 from pydantic import BaseModel
+import jwt
 
 from services.user_service import UserService
 from services.message_service import MessageService
@@ -104,6 +105,15 @@ async def verify_token_middleware(request: Request, call_next):
     # 验证token
     is_valid, payload = auth_service.verify_token(token, "access")
     if not is_valid:
+        # 尝试从无效令牌中提取用户ID并清理缓存
+        try:
+            decoded = jwt.decode(token, options={"verify_signature": False})
+            if "sub" in decoded:
+                user_id = decoded["sub"]
+                await redis_client.delete_user_cache(user_id)
+        except:
+            pass  # 忽略解析无效令牌的错误
+            
         return JSONResponse(
             status_code=401,
             content={"status": "error", "message": "无效的访问令牌"}
@@ -249,6 +259,23 @@ async def get_user_info(user_id: str):
         return result
     except Exception as e:
         logger.error(f"获取用户信息失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/user/{user_id}/session")
+async def check_user_session(user_id: str):
+    """检查用户会话是否存在（用于断线重连）"""
+    try:
+        # 调用redis工具检查用户是否存在于缓存中
+        session_exists = await redis_client.user_exists(user_id)
+        return {
+            "success": True,
+            "message": "会话状态检查成功",
+            "data": {
+                "session_exists": session_exists
+            }
+        }
+    except Exception as e:
+        logger.error(f"检查用户会话失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/token/refresh")

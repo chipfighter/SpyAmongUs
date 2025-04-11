@@ -82,6 +82,8 @@ class UserService:
             # 确保移除MongoDB不需要的字段
             if "current_room" in complete_user_data:
                 complete_user_data.pop("current_room")
+            # 不在MongoDB中存储status
+            if "status" in complete_user_data:
                 complete_user_data.pop("status")
             
             # 过滤敏感数据用于Redis和返回客户端
@@ -142,7 +144,6 @@ class UserService:
 
             # 更新用户状态为在线
             user.status = USER_STATUS_ONLINE
-            await self.mongo_client.update_user_status(user.id, user.status)
 
             # 更新Redis缓存（过滤敏感信息）
             user_dict = user.dict()  # 这里会移除敏感字段
@@ -204,10 +205,13 @@ class UserService:
                     "message": "无效的状态值"
                 }
 
-            # 更新Redis缓存
-            user_data = await self.mongo_client.find_user(user_id)
-            if user_data:
-                await self.redis_client.update_user_status(user_id, status)
+            # 只更新Redis中的状态
+            success = await self.redis_client.update_user_status(user_id, status)
+            if not success:
+                return {
+                    "success": False,
+                    "message": "更新状态失败"
+                }
 
             return {
                 "success": True,
@@ -348,6 +352,9 @@ class UserService:
                         "success": False,
                         "message": "用户不存在"
                     }
+                
+                # MongoDB中没有状态字段，设置默认状态
+                user_data["status"] = USER_STATUS_ONLINE
                     
                 # 更新缓存
                 await self.redis_client.cache_user(user_id, user_data)

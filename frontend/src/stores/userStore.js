@@ -172,6 +172,29 @@ export const useUserStore = defineStore('user', {
         }
         return false
       }
+    },
+    
+    // 检查用户会话是否存在（用于断线重连）
+    async checkSessionExists() {
+      if (!this.user?.id) return false
+      
+      try {
+        const response = await axios.get(`${API_URL}/api/user/${this.user.id}/session`)
+        if (response.data.success) {
+          // 如果会话存在，刷新活动时间
+          if (response.data.data.session_exists) {
+            this.updateActivityTime()
+            return true
+          } else {
+            // 会话不存在，返回false
+            return false
+          }
+        }
+        return false
+      } catch (error) {
+        console.error('检查用户会话失败:', error)
+        return false
+      }
     }
   }
 })
