@@ -15,12 +15,12 @@ Notes:
     -
 
 To-Do:
-
+    用户画像+胜率更新
 """
 
 from typing import Dict, Any
 
-from models.user import User
+from models.user import User, StyleProfile, UserStatistics
 from utils.mongo_utils import MongoClient
 from utils.redis_utils import RedisClient
 from services.auth_service import AuthService
@@ -52,7 +52,7 @@ class UserService:
         注册新用户
 
         Notes:
-            针对MongoDB和Redis存储的数据需要做区分
+            针对MongoDB和Redis存储的数据需要做区分，先存MongoDB后存redis
             MongoDB不保存时效性高，持久性低的数据
             Redis不保存敏感信息
 
@@ -172,7 +172,6 @@ class UserService:
     async def logout(self, user_id: str) -> Dict[str, Any]:
         """用户登出"""
         try:
-
             # 从Redis中删除用户缓存
             await self.redis_client.delete_user_cache(user_id)
 
@@ -344,7 +343,36 @@ class UserService:
         try:
             # 先从Redis缓存中获取
             user_data = await self.redis_client.get_user(user_id)
-            if not user_data:
+            if user_data:
+                # 读取出来先重构成对象类型
+                # 1. 创建合适的statistics对象
+                user_data["statistics"] = UserStatistics(
+                    total_games=int(user_data.get("total_games", 0)),
+                    win_rates={
+                        "civilian": float(user_data.get("win_rate_civilian", 0.0)),
+                        "spy": float(user_data.get("win_rate_spy", 0.0))
+                    }
+                ).dict()
+
+                # 2. 创建合适的style_profile对象
+                tags = set()
+                if user_data.get("tags"):
+                    try:
+                        tags = set(user_data.get("tags").split(","))
+                    except:
+                        pass
+
+                user_data["style_profile"] = StyleProfile(
+                    summary=user_data.get("summary", ""),
+                    tags=tags,
+                    vectors={}
+                ).dict()
+
+                # 3. 移除扁平化字段避免冲突
+                for key in ["total_games", "win_rate_civilian", "win_rate_spy", "summary", "tags"]:
+                    if key in user_data:
+                        user_data.pop(key)
+
                 # 如果缓存中没有，从MongoDB获取
                 user_data = await self.mongo_client.find_user(user_id)
                 if not user_data:
@@ -372,30 +400,4 @@ class UserService:
             return {
                 "success": False,
                 "message": f"获取失败: {str(e)}"
-            }
-
-    async def refresh_token(self, refresh_token: str) -> Dict[str, Any]:
-        """刷新访问令牌"""
-        try:
-            # 验证刷新令牌
-            new_access_token = self.auth_service.refresh_access_token(refresh_token)
-            if not new_access_token:
-                return {
-                    "success": False,
-                    "message": "刷新令牌无效或已过期"
-                }
-
-            return {
-                "success": True,
-                "message": "令牌刷新成功",
-                "data": {
-                    "access_token": new_access_token
-                }
-            }
-
-        except Exception as e:
-            logger.error(f"刷新令牌失败: {str(e)}")
-            return {
-                "success": False,
-                "message": f"刷新失败: {str(e)}"
             }
