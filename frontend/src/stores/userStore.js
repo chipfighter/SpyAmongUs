@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import axios from 'axios'
-
-const API_URL = 'http://localhost:8000'
+import { API_URL } from '@/config'
 
 export const useUserStore = defineStore('user', {
   state: () => ({
@@ -10,29 +9,26 @@ export const useUserStore = defineStore('user', {
     refreshToken: null,
     loading: false,
     error: null,
-    lastActivityTime: Date.now() // 添加用户最后活动时间
+    lastActivityTime: Date.now(),
+    tokenRefreshTimer: null
   }),
   
   getters: {
     isAuthenticated: (state) => !!state.accessToken,
     userAvatar: (state) => state.user?.avatar_url || '/default_avatar.jpg',
-    // 检查会话是否过期 (25分钟无活动)
     isSessionExpired: (state) => {
       if (!state.lastActivityTime) return true
       const inactiveTime = Date.now() - state.lastActivityTime
-      // 如果用户超过24分钟无活动，视为会话过期 (小于JWT的25分钟)
       return inactiveTime > 24 * 60 * 1000
     }
   },
   
   actions: {
-    // 更新最后活动时间
     updateActivityTime() {
       this.lastActivityTime = Date.now()
       localStorage.setItem('lastActivityTime', this.lastActivityTime.toString())
     },
     
-    // 初始化状态（从localStorage加载）
     initStore() {
       const accessToken = localStorage.getItem('accessToken')
       const refreshToken = localStorage.getItem('refreshToken')
@@ -44,29 +40,49 @@ export const useUserStore = defineStore('user', {
         this.refreshToken = refreshToken
         this.user = JSON.parse(userData)
         this.lastActivityTime = lastActivityTime ? parseInt(lastActivityTime) : Date.now()
+        // 初始化后启动token刷新定时器
+        this.startTokenRefreshTimer()
       }
     },
     
-    // 保存用户数据到localStorage
     saveUserData() {
       if (this.accessToken) {
         localStorage.setItem('accessToken', this.accessToken)
         localStorage.setItem('refreshToken', this.refreshToken || '')
         localStorage.setItem('userData', JSON.stringify(this.user))
         localStorage.setItem('lastActivityTime', this.lastActivityTime.toString())
+        // 确保token与路由守卫匹配
+        localStorage.setItem('token', this.accessToken)
+        // 同时将userInfo存储为与RoomView中使用的格式一致
+        localStorage.setItem('userInfo', JSON.stringify({
+          id: this.user.id,
+          username: this.user.username,
+          avatar_url: this.user.avatar_url
+        }))
       }
     },
     
-    // 设置请求头
-    setAuthHeader() {
-      if (this.accessToken) {
-        axios.defaults.headers.common['Authorization'] = this.accessToken
-      } else {
-        delete axios.defaults.headers.common['Authorization']
+    startTokenRefreshTimer() {
+      // 清除现有定时器
+      if (this.tokenRefreshTimer) {
+        clearInterval(this.tokenRefreshTimer)
+      }
+      
+      // 每20分钟刷新一次token（access_token有效期25分钟）
+      this.tokenRefreshTimer = setInterval(async () => {
+        if (this.isAuthenticated) {
+          await this.refreshAccessToken()
+        }
+      }, 20 * 60 * 1000)
+    },
+    
+    stopTokenRefreshTimer() {
+      if (this.tokenRefreshTimer) {
+        clearInterval(this.tokenRefreshTimer)
+        this.tokenRefreshTimer = null
       }
     },
     
-    // 登录
     async login(username, password) {
       this.loading = true
       this.error = null
@@ -76,12 +92,26 @@ export const useUserStore = defineStore('user', {
         
         if (response.data.success) {
           const { data } = response.data
-          this.user = data
+          // 将整个用户数据设置到user中
+          this.user = {
+            id: data.id,
+            username: data.username,
+            avatar_url: data.avatar_url,
+            status: data.status,
+            current_room: data.current_room,
+            statistics: data.statistics,
+            style_profile: data.style_profile
+          }
           this.accessToken = data.access_token
           this.refreshToken = data.refresh_token
+          
+          // 同时设置localStorage中的token键，以匹配路由守卫
+          localStorage.setItem('token', data.access_token)
+          
           this.updateActivityTime()
           this.saveUserData()
-          this.setAuthHeader()
+          // 登录成功后启动token刷新定时器
+          this.startTokenRefreshTimer()
           return true
         } else {
           this.error = response.data.message
@@ -95,7 +125,6 @@ export const useUserStore = defineStore('user', {
       }
     },
     
-    // 注册
     async register(username, password) {
       this.loading = true
       this.error = null
@@ -104,13 +133,27 @@ export const useUserStore = defineStore('user', {
         const response = await axios.post(`${API_URL}/api/register`, { username, password })
         
         if (response.data.success) {
-          const { user_id, user_data } = response.data.data
-          this.user = user_data
-          this.accessToken = user_data.access_token
-          this.refreshToken = user_data.refresh_token
+          const { data } = response.data;
+          // 解构需要的用户数据
+          this.user = {
+            id: data.id,
+            username: data.username,
+            avatar_url: data.avatar_url,
+            status: data.status,
+            current_room: data.current_room,
+            statistics: data.statistics || {},
+            style_profile: data.style_profile || {}
+          }
+          this.accessToken = data.access_token
+          this.refreshToken = data.refresh_token
+          
+          // 同时设置localStorage中的token键，以匹配路由守卫
+          localStorage.setItem('token', data.access_token)
+          
           this.updateActivityTime()
           this.saveUserData()
-          this.setAuthHeader()
+          // 注册成功后启动token刷新定时器
+          this.startTokenRefreshTimer()
           return true
         } else {
           this.error = response.data.message
@@ -124,25 +167,59 @@ export const useUserStore = defineStore('user', {
       }
     },
     
-    // 登出
     async logout() {
-      this.loading = true
-      this.error = null
+      this.loading = true;
+      this.error = null;
       
       try {
-        if (this.user?.id) {
-          await axios.post(`${API_URL}/api/logout`, { user_id: this.user.id })
+        // 停止token刷新定时器
+        this.stopTokenRefreshTimer();
+        
+        // 保存当前的token用于请求
+        const token = this.accessToken;
+        const userId = this.user?.id;
+        
+        console.log('准备登出用户:', userId);
+        
+        if (token && userId) {
+          try {
+            console.log('发送登出请求，使用token:', token.substring(0, 10) + '...');
+            
+            // 先发送请求到后端，让服务器清理会话
+            const response = await axios({
+              method: 'post',
+              url: `${API_URL}/api/logout`,
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+              },
+              data: {},
+              timeout: 5000
+            });
+            
+            console.log('登出响应:', response.data);
+          } catch (apiError) {
+            console.error('服务器登出请求失败:', apiError.response?.data?.message || apiError.message);
+          }
+        } else {
+          console.warn('登出缺少必要信息:', { hasToken: !!token, hasUserId: !!userId });
         }
+        
+        // 无论服务器请求成功与否，都清理本地状态
+        this.clearUserData();
+        console.log('用户本地状态已清理');
+        
       } catch (error) {
-        console.error('登出时发生错误:', error)
+        console.error('登出过程中发生错误:', error);
+        // 确保在出错时也能清理本地状态
+        this.clearUserData();
       } finally {
-        // 无论后端响应如何，都清除本地状态
-        this.clearUserData()
-        this.loading = false
+        this.loading = false;
       }
+      
+      return true;
     },
     
-    // 清除用户数据
     clearUserData() {
       this.user = null
       this.accessToken = null
@@ -152,10 +229,13 @@ export const useUserStore = defineStore('user', {
       localStorage.removeItem('refreshToken')
       localStorage.removeItem('userData')
       localStorage.removeItem('lastActivityTime')
-      delete axios.defaults.headers.common['Authorization']
+      // 同时清除与路由守卫相关的token
+      localStorage.removeItem('token')
+      localStorage.removeItem('userInfo')
+      // 停止token刷新定时器
+      this.stopTokenRefreshTimer()
     },
     
-    // 检查用户状态
     async checkUserStatus() {
       if (!this.user?.id || !this.accessToken) return false
       
@@ -168,31 +248,82 @@ export const useUserStore = defineStore('user', {
         return false
       } catch (error) {
         if (error.response?.status === 401) {
-          this.clearUserData()
+          // 尝试刷新token
+          const refreshed = await this.refreshAccessToken()
+          if (!refreshed) {
+            this.clearUserData()
+          }
+          return refreshed
         }
         return false
       }
     },
     
-    // 检查用户会话是否存在（用于断线重连）
     async checkSessionExists() {
       if (!this.user?.id) return false
       
       try {
         const response = await axios.get(`${API_URL}/api/user/${this.user.id}/session`)
+        
         if (response.data.success) {
-          // 如果会话存在，刷新活动时间
-          if (response.data.data.session_exists) {
+          const sessionExists = response.data.data.session_exists
+          
+          if (sessionExists) {
             this.updateActivityTime()
             return true
           } else {
-            // 会话不存在，返回false
+            this.clearUserData()
             return false
           }
         }
         return false
       } catch (error) {
         console.error('检查用户会话失败:', error)
+        if (error.response?.status === 401) {
+          // 尝试刷新token
+          const refreshed = await this.refreshAccessToken()
+          if (!refreshed) {
+            this.clearUserData()
+          }
+          return refreshed
+        }
+        return false
+      }
+    },
+    
+    async refreshAccessToken() {
+      if (!this.refreshToken) {
+        console.error('刷新token失败: 没有可用的刷新令牌')
+        this.clearUserData()
+        return false
+      }
+      
+      console.log('尝试刷新访问令牌...')
+      
+      try {
+        const response = await axios.post(`${API_URL}/api/token/refresh`, {
+          refresh_token: this.refreshToken
+        })
+        
+        if (response.data.success) {
+          // 更新access token
+          this.accessToken = response.data.data.access_token
+          localStorage.setItem('accessToken', this.accessToken)
+          this.updateActivityTime()
+          console.log('访问令牌刷新成功')
+          return true
+        }
+        
+        console.warn('服务器返回成功但缺少token数据')
+        return false
+      } catch (error) {
+        console.error('刷新访问令牌失败:', error.response?.data?.message || error.message)
+        
+        // 如果是401错误，可能是refresh token已过期或无效
+        if (error.response?.status === 401) {
+          console.warn('刷新令牌已过期或无效，清除用户数据')
+          this.clearUserData()
+        }
         return false
       }
     }

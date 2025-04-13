@@ -15,7 +15,9 @@ Notes:
     - 获取公开房间列表
 
 To-Do:
-    - 删除用户（需要判断是否房主+是否处于游戏中）
+    - 添加用户（普通用户的加入操作）
+    - 删除用户（需要判断是否房主，游戏中没法删除用户，必须等到游戏结束）
+    - 请求AI操作（自由聊天的时候@AI助手）
 """
 
 from typing import Dict, Any, Optional
@@ -105,7 +107,7 @@ class RoomService:
 
                 # 更新房主状态为在房间中
                 await self.user_service.update_user_status(host_id, USER_STATUS_IN_ROOM)
-                
+
                 # 创建房间成功后发送系统通知
                 if self.message_service:
                     await self.message_service.send_system_message(

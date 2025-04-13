@@ -21,7 +21,8 @@ from utils.mongo_utils import MongoClient
 from utils.logger_utils import setup_logger, get_logger
 from config import (
     APP_HOST, APP_PORT, DEBUG,
-    USER_STATUS_ONLINE, MIN_PLAYERS, MIN_SPY_COUNT, MAX_ROUNDS, MAX_SPEAK_TIME, MAX_LAST_WORDS_TIME
+    USER_STATUS_ONLINE, MIN_PLAYERS, MIN_SPY_COUNT, MAX_ROUNDS, MAX_SPEAK_TIME, MAX_LAST_WORDS_TIME,
+    USER_STATUS_IN_ROOM
 )
 from utils.websocket_manager import WebSocketManager
 from services.message_service import MessageService
@@ -60,7 +61,7 @@ app.add_middleware(
 # 初始化服务
 redis_client = RedisClient()
 mongo_client = MongoClient()
-user_service = UserService(redis_client)
+user_service = UserService(redis_client, mongo_client)
 websocket_manager = WebSocketManager()
 message_service = MessageService(redis_client, websocket_manager)
 room_service = RoomService(user_service, redis_client, websocket_manager)
@@ -239,6 +240,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         
         # 1.验证是否获取到token
         if not token:
+            logger.warning(f"WebSocket连接 {room_id} 缺少token")
             await websocket.close(code=1008, reason="Missing authentication")
             return
             
@@ -246,19 +248,69 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         is_valid, payload = auth_service.verify_token(token, "access")
 
         if not is_valid or 'sub' not in payload:
+            logger.warning(f"WebSocket连接 {room_id} 的token无效")
             await websocket.close(code=1008, reason="Invalid authentication")
             return
 
         user_id = payload['sub']
+        
+        logger.info(f"用户 {user_id} 尝试连接房间 {room_id} 的WebSocket")
 
         # 2.验证用户是否在指定房间
         user_info = await user_service.get_user_info(user_id)
-        if not user_info["success"] or user_info["data"].get("current_room") != room_id:
+        
+        # 获取用户在Redis中的原始数据，用于调试
+        raw_user_data = await redis_client.get_user(user_id)
+        logger.info(f"Redis中用户 {user_id} 的数据: {raw_user_data}")
+        
+        # 检查房间是否存在
+        room_exists = await redis_client.check_room_exists(room_id)
+        logger.info(f"房间 {room_id} 存在: {room_exists}")
+        
+        # 检查用户是否在房间的用户列表中
+        is_user_in_room_list = await redis_client.is_user_in_room(room_id, user_id)
+        logger.info(f"用户 {user_id} 在房间 {room_id} 的用户列表中: {is_user_in_room_list}")
+        
+        # 检查用户的current_room字段
+        current_room = user_info["data"].get("current_room") if user_info["success"] else "无法获取"
+        logger.info(f"用户 {user_id} 的current_room字段值: {current_room}")
+        
+        # 检查用户的status字段
+        user_status = user_info["data"].get("status") if user_info["success"] else "无法获取"
+        logger.info(f"用户 {user_id} 的status字段值: {user_status}")
+        
+        # 修改验证逻辑：只要用户在房间的users集合中或current_room匹配，就允许连接
+        if not room_exists:
+            logger.warning(f"房间 {room_id} 不存在，拒绝WebSocket连接")
+            await websocket.close(code=1008, reason="Room does not exist")
+            return
+            
+        # 判断用户是否有权限连接该房间
+        is_allowed = False
+        
+        # 如果current_room匹配，允许连接
+        if user_info["success"] and user_info["data"].get("current_room") == room_id:
+            is_allowed = True
+            logger.info(f"用户 {user_id} 的current_room字段匹配，允许连接")
+            
+        # 如果用户在房间的users集合中，允许连接
+        elif is_user_in_room_list:
+            is_allowed = True
+            logger.info(f"用户 {user_id} 在房间users集合中，允许连接，并自动修复状态")
+            
+            # 修复用户状态和current_room
+            await user_service.update_current_room(user_id, room_id)
+            await user_service.update_user_status(user_id, USER_STATUS_IN_ROOM)
+            logger.info(f"已更新用户 {user_id} 的current_room为 {room_id}，状态为 {USER_STATUS_IN_ROOM}")
+            
+        if not is_allowed:
+            logger.warning(f"用户 {user_id} 无权连接房间 {room_id} 的WebSocket")
             await websocket.close(code=1008, reason="User not in this room")
             return
 
         # 3.添加到连接管理器
         await websocket_manager.add_connection(room_id, user_id, websocket)
+        logger.info(f"用户 {user_id} 已添加到房间 {room_id} 的WebSocket连接管理器")
 
         # 4.发送连接成功消息
         await websocket.send_json({
@@ -267,6 +319,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             "room_id": room_id,
             "timestamp": int(time.time() * 1000)
         })
+        logger.info(f"已向用户 {user_id} 发送WebSocket连接成功消息")
 
         # 5.监听消息
         while True:
@@ -278,7 +331,17 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 try:
                     message_data = json.loads(raw_message)
                     
-                    # 处理消息
+                    # 处理心跳消息
+                    if message_data.get("type") == "ping":
+                        # 立即回复pong心跳响应
+                        logger.debug(f"收到用户 {user_id} 的ping心跳，立即回复pong")
+                        await websocket.send_json({
+                            "type": "pong",
+                            "timestamp": int(time.time() * 1000)
+                        })
+                        continue
+                    
+                    # 处理普通消息
                     result = await message_service.process_message(room_id, message_data, user_id)
                     
                     # 如果处理失败，发送错误响应
@@ -298,7 +361,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     })
                     
             except Exception as e:
-                logger.error(f"处理WebSocket消息时出错: {str(e)}")
+                logger.info(f"处理WebSocket消息时出错: {str(e)}")
                 # 发送错误信息但不断开连接
                 try:
                     await websocket.send_json({
@@ -643,7 +706,7 @@ async def delete_room(invite_code: str, request: Request):
         logger.error(f"删除房间失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/rooms/public")
+@app.get("/api/rooms/refresh_public_room")
 async def refresh_public_rooms():
     """刷新获取公开房间列表API"""
     try:

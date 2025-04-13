@@ -95,7 +95,7 @@ class MessageService:
                     "success": False,
                     "message": "房间不存在"
                 }
-                
+
             # 检查用户是否在该房间
             is_user_in_room = await self.redis_client.is_user_in_room(room_id, user_id)
             if not is_user_in_room:

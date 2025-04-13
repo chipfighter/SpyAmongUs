@@ -11,6 +11,8 @@
 
 # Other files
 **/stream_output.py
+backend/tests/
+backend/log.txt
 # all temporary md files in backend
 backend/docs/*.md
 backend/*.md

@@ -77,7 +77,8 @@ class WebSocketManager:
         logger.info(f"房间 {room_id} 的所有连接已关闭，实际关闭连接数: {len(disconnected_users)}")
 
     async def broadcast_message(self, room_id: str, message: dict, is_special: bool, target_users: set = None) -> None:
-        """广播消息到房间
+        """
+        广播消息到房间
 
         Args:
             room_id: 房间ID
@@ -117,7 +118,8 @@ class WebSocketManager:
             await asyncio.gather(*send_tasks, return_exceptions=True)
             
     async def _send_message_to_user(self, room_id: str, user_id: str, websocket: WebSocket, message_text: str) -> None:
-        """向单个用户发送消息
+        """
+        向单个用户发送消息
         
         Args:
             room_id: 房间ID
@@ -132,4 +134,11 @@ class WebSocketManager:
             await websocket.send_text(message_text)
         except Exception as e:
             logger.error(f"向用户 {user_id} 发送消息失败: {str(e)}")
-            # 可以添加断线重连逻辑或者其他错误处理
+            # 尝试判断连接是否已断开
+            try:
+                # 发送简单的ping消息测试连接
+                await websocket.send_json({"type": "ping_test"})
+            except Exception:
+                logger.warning(f"确认用户 {user_id} 连接已断开，从房间 {room_id} 移除连接")
+                # 如果无法发送，说明连接确实断开，移除连接
+                await self.remove_user_connection(room_id, user_id)
