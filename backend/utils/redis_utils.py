@@ -17,10 +17,11 @@ Notes:
     房间：
         - 创建房间
         - 删除房间
-        - 修改房间状态、加入新用户、删除房间用户（普通用户）、删除房间用户（房主）、更新房间活动时间
-        - 查看当前房间的所有用户ID
+        - 修改房间状态、加入新用户、删除房间用户
+        - 查看当前房间的所有用户ID、查看当前房间房主、获取房间基本信息、获取公开房间列表、查看房间是否存在、获取对应房间的人员数量
     消息：
-        - 添加消息（根据房间邀请码，是否secret channel）
+        - 添加消息、添加消息到secret channel
+        - 获取消息列表、获取secret_channel消息列表
 
 To-Do:
     - 修改用户的战绩以及画像
@@ -29,6 +30,8 @@ To-Do:
 import time
 from typing import Optional, Set, Dict, Any
 import redis.asyncio as redis
+
+from models.message import Message
 from utils.logger_utils import get_logger
 from config import (
     REDIS_HOST, REDIS_PORT, REDIS_DB,
@@ -45,8 +48,8 @@ logger = get_logger(__name__)
 
 class RedisClient:
     def __init__(self):
-        """初始化Redis客户端"""
         try:
+            # 创建redis客户端的连接
             self._redis = redis.Redis(
                 host=REDIS_HOST,
                 port=REDIS_PORT,
@@ -267,15 +270,62 @@ class RedisClient:
             logger.error(f"缓存房间数据失败: {str(e)}")
             return False
 
+    async def update_room_status(self, invite_code: str, status: str) -> bool:
+        """更新房间状态"""
+        try:
+            room_key = f"{ROOM_KEY_PREFIX}{invite_code}"
+            await self._redis.hset(room_key, "status", status)
+
+            return True
+        except Exception as e:
+            logger.error(f"更新房间状态失败: {str(e)}")
+            return False
+
+    async def update_room_user(self, invite_code: str, user_id: str) -> bool:
+        """将用户添加到房间"""
+        try:
+            # 将用户添加到房间用户集合
+            users_key = ROOM_USERS_KEY_PREFIX % invite_code
+            await self._redis.sadd(users_key, user_id)
+
+            return True
+        except Exception as e:
+            logger.error(f"添加用户到房间失败: {str(e)}")
+            return False
+
+    async def delete_room_user(self, invite_code: str, user_id: str) -> bool:
+        """从房间中删除特定用户
+
+        Notes:
+            仅仅提供删除房间用户的redis操作，所有逻辑判断都在room_service
+        """
+        try:
+            # 从房间用户集合中移除用户
+            users_key = ROOM_USERS_KEY_PREFIX % invite_code
+            await self._redis.srem(users_key, user_id)
+
+            # 从准备用户集合中移除用户
+            ready_users_key = ROOM_READY_USERS_KEY_PREFIX % invite_code
+            await self._redis.srem(ready_users_key, user_id)
+
+            return True
+        except Exception as e:
+            logger.error(f"从房间删除用户失败: {str(e)}")
+            return False
+
+
     async def delete_room(self, invite_code: str) -> bool:
         """删除Redis中的房间数据以及相关数据（仅处理房间的相关删除）"""
         try:
+            # 创建pipeline以批量执行命令，快速删除多个相关的键
+            pipe = self._redis.pipeline()
+            
             # 删除房间基本信息
             room_key = f"{ROOM_KEY_PREFIX}{invite_code}"
-            await self._redis.delete(room_key)
+            pipe.delete(room_key)
 
             # 从公开房间集合中移除
-            await self._redis.srem(PUBLIC_ROOMS_KEY, invite_code)
+            pipe.srem(PUBLIC_ROOMS_KEY, invite_code)
 
             # 删除房间的其他集合
             keys_to_delete = [
@@ -287,35 +337,30 @@ class RedisClient:
                 ROOM_SECRET_CHAT_MESSAGES_KEY_PREFIX % invite_code
             ]
 
-            # 删除投票记录
-            votes_key = ROOM_VOTES_KEY_PREFIX % (invite_code, "*")
-            vote_keys = await self._redis.keys(votes_key)
-            for key in vote_keys:
-                await self._redis.delete(key)
-
-            # 删除秘密投票记录
-            secret_votes_key = ROOM_SECRET_VOTES_KEY_PREFIX % (invite_code, "*")
-            secret_vote_keys = await self._redis.keys(secret_votes_key)
-            for key in secret_vote_keys:
-                await self._redis.delete(key)
-
-            # 删除基本集合
+            # 添加所有房间相关键到管道
             for key in keys_to_delete:
-                await self._redis.delete(key)
+                pipe.delete(key)
 
+            # 查找并添加所有投票记录键到管道
+            votes_key_pattern = ROOM_VOTES_KEY_PREFIX % (invite_code, "*")
+            vote_keys = await self._redis.keys(votes_key_pattern)
+            for key in vote_keys:
+                pipe.delete(key)
+
+            # 查找并添加所有秘密投票记录键到管道
+            secret_votes_key_pattern = ROOM_SECRET_VOTES_KEY_PREFIX % (invite_code, "*")
+            secret_vote_keys = await self._redis.keys(secret_votes_key_pattern)
+            for key in secret_vote_keys:
+                pipe.delete(key)
+
+            # 执行所有命令
+            await pipe.execute()
+            logger.info(f"成功删除房间 {invite_code} 的所有数据")
+            
             return True
         except Exception as e:
             logger.error(f"删除房间数据失败: {str(e)}")
             return False
-
-    async def get_room_users(self, invite_code: str) -> Set[str]:
-        """获取房间中的所有用户ID"""
-        try:
-            users_key = ROOM_USERS_KEY_PREFIX % invite_code
-            return await self._redis.smembers(users_key)
-        except Exception as e:
-            logger.error(f"获取房间用户失败: {str(e)}")
-            return set()
 
     async def get_room_host(self, invite_code: str) -> str:
         """获取房间房主ID"""
@@ -329,17 +374,7 @@ class RedisClient:
             return ""
 
     async def get_room_basic_data(self, invite_code: str) -> dict:
-        """
-        获取房间基本数据信息
-
-        返回 房间创建时的基本信息、房间中的用户列表
-
-        Args:
-            invite_code: 房间邀请码
-            
-        Returns:
-            dict: 房间的完整数据字典，包括基本信息和关联数据集合
-        """
+        """获取房间基本数据信息（几个用户集合并不返回！）"""
         try:
             # 获取房间基本信息
             room_key = f"{ROOM_KEY_PREFIX}{invite_code}"
@@ -347,17 +382,51 @@ class RedisClient:
             
             if not room_data:
                 return {}
-                
-            # 获取房间用户列表
-            users_key = ROOM_USERS_KEY_PREFIX % invite_code
-            users = await self._redis.smembers(users_key)
-            room_data["users"] = list(users)
 
             return room_data
         except Exception as e:
             logger.error(f"获取房间数据失败: {str(e)}")
             return {}
-            
+
+    async def get_room_users(self, invite_code: str) -> Set[str]:
+        """获取房间中的所有用户ID（在房间的用户）"""
+        try:
+            users_key = ROOM_USERS_KEY_PREFIX % invite_code
+            return await self._redis.smembers(users_key)
+        except Exception as e:
+            logger.error(f"获取房间用户失败: {str(e)}")
+            return set()
+
+    async def get_public_rooms(self) -> list:
+        """获取所有公开房间的列表"""
+        try:
+            # 获取所有公开房间的邀请码
+            public_room_codes = await self._redis.smembers(PUBLIC_ROOMS_KEY)
+            return list(public_room_codes) if public_room_codes else []
+        except Exception as e:
+            logger.error(f"获取公开房间列表失败: {str(e)}")
+            return []
+
+    async def get_room_current_phase(self, invite_code: str) -> str:
+        """获取房间当前游戏阶段"""
+        try:
+            room_key = f"{ROOM_KEY_PREFIX}{invite_code}"
+            phase = await self._redis.hget(room_key, "current_phase")
+            return phase
+        except Exception as e:
+            logger.error(f"获取房间阶段失败: {str(e)}")
+            return ""
+
+    async def get_room_users_count(self, invite_code: str) -> int:
+        """获取房间用户数量"""
+        try:
+            users_key = ROOM_USERS_KEY_PREFIX % invite_code
+            count = await self._redis.scard(users_key)
+            return count
+        except Exception as e:
+            logger.error(f"获取房间用户数量失败: {str(e)}")
+            return 0
+
     async def check_room_exists(self, invite_code: str) -> bool:
         """检查房间是否存在"""
         try:
@@ -366,3 +435,54 @@ class RedisClient:
         except Exception as e:
             logger.error(f"检查房间是否存在失败: {str(e)}")
             return False
+
+    async def is_user_in_room(self, invite_code: str, user_id: str) -> bool:
+        """检查用户是否在指定房间内"""
+        try:
+            users_key = ROOM_USERS_KEY_PREFIX % invite_code
+            return await self._redis.sismember(users_key, user_id)
+        except Exception as e:
+            logger.error(f"检查用户是否在房间内失败: {str(e)}")
+            return False
+
+
+    # 消息相关
+    async def add_room_message(self, invite_code: str, message: Message) -> bool:
+        """将消息写入普通房间消息列表"""
+        try:
+            room_key = ROOM_MESSAGES_KEY_PREFIX % invite_code
+            await self._redis.rpush(room_key, message.json())    # 使用 Pydantic 自带的.json()
+            return True
+        except Exception as e:
+            logger.error(f"添加普通房间消息失败: {e}")
+            return False
+
+    async def add_secret_channel_message(self, invite_code: str, message: Message) -> bool:
+        """记录secret_channel消息"""
+        try:
+            room_key = ROOM_SECRET_CHAT_MESSAGES_KEY_PREFIX % invite_code
+            await self._redis.rpush(room_key, message.json())
+            return True
+        except Exception as e:
+            logger.error(f"添加秘密房间消息失败: {e}")
+            return False
+
+    async def get_room_messages(self, invite_code: str, limit: int = 50) -> list:
+        """获取普通房间的消息"""
+        try:
+            key = ROOM_MESSAGES_KEY_PREFIX % invite_code
+            data = await self._redis.lrange(key, -limit, -1)
+            return [Message.parse_raw(item) for item in data]
+        except Exception as e:
+            logger.error(f"获取普通房间的消息列表失败: {e}")
+            return []
+
+    async def get_secret_channel_messages(self, invite_code: str, limit: int = 50) -> list:
+        """获取secret_channel的消息"""
+        try:
+            key = ROOM_SECRET_CHAT_MESSAGES_KEY_PREFIX % invite_code
+            data = await self._redis.lrange(key, -limit, -1)
+            return [Message.parse_raw(item) for item in data]
+        except Exception as e:
+            logger.error(f"获取秘密房间的消息列表失败: {e}")
+            return []

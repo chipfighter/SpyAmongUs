@@ -1,5 +1,8 @@
 """
 model: Message
+
+Notes:
+    一般传输按照dict类型直接传输即可
 """
 from pydantic import BaseModel
 import time
@@ -11,7 +14,7 @@ class Message(BaseModel):
     user_name: str          # 发送者用户名 (改名从username为user_name)
     content: str            # 消息内容
     is_system: bool = False # 是否为系统消息
-    round: str = "0"        # 所属回合（改为字符串类型）
+    round: str = "0"        # 所属回合（改为字符串类型）【如果是"0"默认游戏没有开始，游戏开始的回合为"round_x"】
 
     @classmethod
     def create_user_message(cls, user_id: str, user_name: str, content: str) -> 'Message':

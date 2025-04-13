@@ -2,6 +2,7 @@
 核心文件：多人聊天系统v0.0.5
 """
 import time
+import json
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -23,6 +24,7 @@ from config import (
     USER_STATUS_ONLINE, MIN_PLAYERS, MIN_SPY_COUNT, MAX_ROUNDS, MAX_SPEAK_TIME, MAX_LAST_WORDS_TIME
 )
 from utils.websocket_manager import WebSocketManager
+from services.message_service import MessageService
 
 # 配置日志
 setup_logger("SpyAmongUs")
@@ -55,15 +57,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 初始化服务和客户端
+# 初始化服务
 redis_client = RedisClient()
 mongo_client = MongoClient()
-user_service = UserService(redis_client, mongo_client)
-# websocket相关
+user_service = UserService(redis_client)
 websocket_manager = WebSocketManager()
+message_service = MessageService(redis_client, websocket_manager)
 room_service = RoomService(user_service, redis_client, websocket_manager)
 auth_service = AuthService()
 
+# 设置服务之间的依赖关系
+room_service.set_message_service(message_service)
 
 # 验证token中间件
 @app.middleware("http")
@@ -216,10 +220,7 @@ async def read_root():
             "error": str(e)
         }
 
-
 # websocket相关
-websocket_manager = WebSocketManager()
-
 @app.websocket("/ws/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
     """websocket端口控制"""
@@ -236,7 +237,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             data = await websocket.receive_json()
             token = data.get("token")
         
-        # 验证是否获取到token
+        # 1.验证是否获取到token
         if not token:
             await websocket.close(code=1008, reason="Missing authentication")
             return
@@ -250,19 +251,16 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
 
         user_id = payload['sub']
 
-        # 验证用户是否在指定房间
+        # 2.验证用户是否在指定房间
         user_info = await user_service.get_user_info(user_id)
         if not user_info["success"] or user_info["data"].get("current_room") != room_id:
             await websocket.close(code=1008, reason="User not in this room")
             return
 
-        # 添加到连接管理器
+        # 3.添加到连接管理器
         await websocket_manager.add_connection(room_id, user_id, websocket)
 
-        # 更新房间活动时间
-        await room_service.update_room_activity(room_id)
-
-        # 发送连接成功消息
+        # 4.发送连接成功消息
         await websocket.send_json({
             "type": "system",
             "event": "connected",
@@ -270,14 +268,50 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             "timestamp": int(time.time() * 1000)
         })
 
-        # 监听消息（暂时不处理）
+        # 5.监听消息
         while True:
-            # 等待消息
-            message = await websocket.receive_text()
-            # 暂不处理，下一版本实现消息处理
+            try:
+                # 等待消息
+                raw_message = await websocket.receive_text()
+                
+                # 解析消息内容
+                try:
+                    message_data = json.loads(raw_message)
+                    
+                    # 处理消息
+                    result = await message_service.process_message(room_id, message_data, user_id)
+                    
+                    # 如果处理失败，发送错误响应
+                    if not result["success"]:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": result["message"],
+                            "timestamp": int(time.time() * 1000)
+                        })
+                        
+                except json.JSONDecodeError:
+                    logger.error(f"收到无效JSON消息: {raw_message}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "消息格式无效",
+                        "timestamp": int(time.time() * 1000)
+                    })
+                    
+            except Exception as e:
+                logger.error(f"处理WebSocket消息时出错: {str(e)}")
+                # 发送错误信息但不断开连接
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "服务器处理消息时出错",
+                        "timestamp": int(time.time() * 1000)
+                    })
+                except:
+                    # 如果无法发送，可能连接已断开
+                    break
 
     except WebSocketDisconnect:
-        # 用户断开连接（缓存清理逻辑放至room_service）
+        # 6.用户断开连接（缓存清理逻辑放至room_service）
         try:
             if 'user_id' in locals() and 'room_id' in locals():
                 await websocket_manager.remove_user_connection(room_id, user_id)
@@ -607,6 +641,18 @@ async def delete_room(invite_code: str, request: Request):
         raise HTTPException(status_code=401, detail="未授权，请重新登录")
     except Exception as e:
         logger.error(f"删除房间失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/rooms/public")
+async def refresh_public_rooms():
+    """刷新获取公开房间列表API"""
+    try:
+        result = await room_service.get_public_rooms()
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+        return result
+    except Exception as e:
+        logger.error(f"获取公开房间列表失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

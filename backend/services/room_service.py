@@ -12,10 +12,10 @@ Notes:
     - data: Optional[Dict]，返回的数据（如果有）
 
     - 创建、删除房间
-    - 更新房间活动状态（仅仅是为了及时清理掉不需要的房间缓存）
+    - 获取公开房间列表
 
 To-Do:
-
+    - 删除用户（需要判断是否房主+是否处于游戏中）
 """
 
 from typing import Dict, Any, Optional
@@ -27,8 +27,6 @@ from utils.websocket_manager import WebSocketManager
 from config import (
     MIN_PLAYERS, MIN_SPY_COUNT, MAX_ROUNDS, MAX_SPEAK_TIME, MAX_LAST_WORDS_TIME, USER_STATUS_ONLINE, USER_STATUS_IN_ROOM
 )
-import time
-import json
 import asyncio
 
 logger = get_logger(__name__)
@@ -38,7 +36,13 @@ class RoomService:
         self.user_service = user_service
         self.redis_client = redis_client
         self.websocket_manager = websocket_manager
+        # 初始化message_service为None，稍后设置
+        self.message_service = None
         logger.info("房间服务已初始化")
+
+    def set_message_service(self, message_service):
+        """设置消息服务，避免循环依赖"""
+        self.message_service = message_service
 
     async def create_room(self, room_name: str, host_id: str, is_public: bool = True,
                           total_players: int = MIN_PLAYERS, spy_count: int = MIN_SPY_COUNT,
@@ -101,6 +105,13 @@ class RoomService:
 
                 # 更新房主状态为在房间中
                 await self.user_service.update_user_status(host_id, USER_STATUS_IN_ROOM)
+                
+                # 创建房间成功后发送系统通知
+                if self.message_service:
+                    await self.message_service.send_system_message(
+                        room_id=room.invite_code,
+                        content=f"房间 \"{room_name}\" 已创建，等待其他玩家加入..."
+                    )
 
                 return {
                     "success": True,
@@ -165,27 +176,36 @@ class RoomService:
             # 获取房间中的所有用户
             users = await self.redis_client.get_room_users(invite_code)
             
-            # 如果启用了通知且WebSocket管理器可用
-            if notify_users and self.websocket_manager:
+            # 如果启用了通知且消息服务可用
+            if notify_users and self.message_service:
                 try:
-                    # 1.先广播给全房间用户（这里需要补充）
+                    # 发送系统消息通知房间即将关闭
+                    await self.message_service.send_system_message(
+                        room_id=invite_code,
+                        content=f"房间即将关闭: {reason}"
+                    )
 
                     # 给用户一点时间接收消息
                     await asyncio.sleep(0.2)
-                    
-                    # 2. 关闭所有WebSocket连接（这里需要调整类型，默认本身是）
+                except Exception as e:
+                    logger.error(f"发送房间关闭通知失败: {str(e)}")
+            
+            # 如果WebSocket管理器可用，关闭所有连接
+            if notify_users and self.websocket_manager:
+                try:
+                    # 关闭所有WebSocket连接
                     await self.websocket_manager.close_room_connections(invite_code, list(users))
                 except Exception as e:
-                    logger.error(f"通知用户房间删除失败: {str(e)}")
+                    logger.error(f"关闭WebSocket连接失败: {str(e)}")
             
-            # 3. 更新所有用户的状态和当前房间
+            # 更新所有用户的状态和当前房间
             for user_id in users:
                 # 修改用户状态从in_room变为online
                 await self.user_service.update_user_status(user_id, USER_STATUS_ONLINE)
                 # 清除用户当前房间
                 await self.user_service.update_current_room(user_id, None)
 
-            # 4. 删除Redis中的房间数据（底层操作）
+            # 删除Redis中的房间数据
             success = await self.redis_client.delete_room(invite_code)
 
             if success:
@@ -207,4 +227,33 @@ class RoomService:
             return {
                 "success": False,
                 "message": f"删除房间失败: {str(e)}"
+            }
+
+    async def get_public_rooms(self) -> Dict[str, Any]:
+        """
+        获取所有公开房间列表
+
+        Returns:
+            Dict: 包含操作结果和房间列表
+        """
+        try:
+            # 从Redis获取公开房间列表
+            rooms = await self.redis_client.get_public_rooms()
+
+            # 按照房间创建时间排序（降序，最新的房间在前面）
+            if rooms:
+                rooms.sort(key=lambda x: int(x.get("created_at", 0)), reverse=True)
+
+            return {
+                "success": True,
+                "message": "获取公开房间列表成功",
+                "data": {
+                    "rooms": rooms
+                }
+            }
+        except Exception as e:
+            logger.error(f"获取公开房间列表失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"获取公开房间列表失败: {str(e)}"
             }
