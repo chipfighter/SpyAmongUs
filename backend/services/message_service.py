@@ -11,9 +11,10 @@ Notes:
     - message: str，操作结果消息
     - data: Optional[Dict]，返回的数据（如果有）
 
-    - 处理websocket发送过来的消息
-    - 服务端的系统消息逻辑
-    - 获取房间、secret_channel消息
+Methods:
+    - 处理websocket发送过来的消息、处理secret_channel发送的消息
+    - 服务端的系统消息发送处理
+    - 获取房间的消息、secret_channel消息
 """
 from typing import Dict, Any, Optional, Set, List
 from models.message import Message
@@ -406,4 +407,3 @@ class MessageService:
                 "success": False,
                 "message": f"获取秘密频道消息失败: {str(e)}"
             }
-

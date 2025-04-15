@@ -11,13 +11,13 @@ Notes:
     - message: str，操作结果消息
     - data: Optional[Dict]，返回的数据（如果有）
 
+Methods:
     - 创建、删除房间
     - 获取公开房间列表
 
 To-Do:
     - 添加用户（普通用户的加入操作）
     - 删除用户（需要判断是否房主，游戏中没法删除用户，必须等到游戏结束）
-    - 请求AI操作（自由聊天的时候@AI助手）
 """
 
 from typing import Dict, Any, Optional

@@ -4,6 +4,12 @@ services: auth_service
 Notes:
     - Access Token: 访问令牌（25min刷新一次）
     - Refresh Token: 刷新令牌（7天刷新一次）
+
+Methods:
+    - 创建tokens
+    - 验证token（两种tokens）
+    - 刷新access_token、刷新refresh_token
+    - 从token中获取user_id
 """
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
@@ -29,9 +35,13 @@ class AuthService:
     def create_tokens(self, user_id: str, username: str) -> Tuple[str, str]:
         """
         创建访问令牌和刷新令牌
-        :param user_id: 用户ID
-        :param username: 用户名
-        :return: (access_token, refresh_token)
+
+        Args:
+            user_id: 用户ID
+            username: 用户名
+
+        Returns:
+            (access_token, refresh_token)
         """
         access_payload = {
             "sub": user_id,
@@ -56,9 +66,13 @@ class AuthService:
     def verify_token(self, token: str, token_type: str = "access") -> Tuple[bool, Optional[Dict]]:
         """
         验证JWT令牌的有效性
-        :param token: 要验证的令牌
-        :param token_type: 令牌类型 ('access' 或 'refresh')
-        :return: (是否有效, 载荷字典或None)
+
+        Args:
+            token: 要验证的令牌
+            token_type: 令牌类型 ('access' 或 'refresh')
+
+        Returns:
+            (是否有效, 载荷字典或None)
         """
         try:
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
@@ -71,8 +85,12 @@ class AuthService:
     def refresh_access_token(self, refresh_token: str) -> Optional[str]:
         """
         使用刷新令牌获取新的访问令牌
-        :param refresh_token: 有效的刷新令牌
-        :return: 新的访问令牌或None(如果刷新令牌无效)
+
+        Args:
+            refresh_token: 有效的刷新令牌
+
+        Returns:
+            新的访问令牌或None(如果刷新令牌无效)
         """
         is_valid, payload = self.verify_token(refresh_token, "refresh")
         if not is_valid or not payload:
@@ -91,8 +109,12 @@ class AuthService:
     def rotate_refresh_token(self, old_refresh_token: str) -> Optional[str]:
         """
         刷新令牌轮换(获取新的刷新令牌)
-        :param old_refresh_token: 旧的刷新令牌
-        :return: 新的刷新令牌或None(如果旧令牌无效)
+
+        Args:
+            old_refresh_token: 旧的刷新令牌
+
+        Returns:
+            新的刷新令牌或None(如果旧令牌无效)
         """
         is_valid, payload = self.verify_token(old_refresh_token, "refresh")
         if not is_valid or not payload:
@@ -111,9 +133,13 @@ class AuthService:
     def get_user_id_from_token(self, token: str, token_type: str = "access") -> Optional[str]:
         """
         从令牌中提取用户ID
-        :param token: JWT令牌
-        :param token_type: 令牌类型 ('access' 或 'refresh')
-        :return: 用户ID或None(如果令牌无效)
+
+        Args:
+            token: JWT令牌
+            token_type: 令牌类型 ('access' 或 'refresh')
+
+        Returns:
+            用户ID或None(如果令牌无效)
         """
         is_valid, payload = self.verify_token(token, token_type)
         return payload["sub"] if is_valid else None
