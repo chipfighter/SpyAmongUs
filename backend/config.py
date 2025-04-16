@@ -71,3 +71,9 @@ MAX_SPY_RATIO = 0.4
 MAX_ROUNDS = 10
 MAX_SPEAK_TIME = 60
 MAX_LAST_WORDS_TIME = 60
+
+# LLM调用场景常量
+LLM_CONTEXT_NORMAL_CHAT = "normal_chat"         # 未开始游戏时的普通聊天@AI
+LLM_CONTEXT_GAME_PLAYING = "game_playing"       # 游戏中轮到AI玩家发言
+LLM_CONTEXT_SECRET_VOTE = "secret_vote"         # 游戏中秘密聊天室投票
+LLM_CONTEXT_SECRET_CHAT = "secret_chat"         # 游戏中秘密聊天室聊天

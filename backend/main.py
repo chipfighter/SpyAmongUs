@@ -1,18 +1,32 @@
 """
-核心文件：多人聊天系统v0.0.5
+谁是卧底多人聊天系统v0.0.6
+
+Description:
+    提供给前端的API接口层、系统全局监测、websocket全局管理
+
+Note:
+    - 验证token+刷新redis TTL的http调用中间件
+    - 应用程序开启、关闭检测
+    - 根路径检测（提供给前端检测，之后可以删除）
+    - websocket全局管理端口
+    - 用户相关API：
+        注册用户、登陆用户、登出用户、获取用户信息、刷新Access_token、刷新Refresh_token
+    - 房间相关API：
+        创建房间、删除房间、刷新公共房间
 """
+
 import time
 import json
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from typing import Dict, Any
 from pydantic import BaseModel
 import jwt
-from fastapi import WebSocket, WebSocketDisconnect
 
+from llm.llm_pipeline import llm_pipeline
 from services.room_service import RoomService
 from services.user_service import UserService
 from services.auth_service import AuthService
@@ -63,7 +77,7 @@ redis_client = RedisClient()
 mongo_client = MongoClient()
 user_service = UserService(redis_client, mongo_client)
 websocket_manager = WebSocketManager()
-message_service = MessageService(redis_client, websocket_manager)
+message_service = MessageService(redis_client, websocket_manager, llm_pipeline)
 room_service = RoomService(user_service, redis_client, websocket_manager)
 auth_service = AuthService()
 
@@ -162,6 +176,9 @@ async def startup_event():
             raise Exception("Redis连接失败")
 
         logger.info("应用初始化成功")
+
+        # 启动WebSocket管理器的清理任务
+        await websocket_manager.start()
     except Exception as e:
         logger.error(f"应用初始化失败: {str(e)}")
         raise
@@ -174,6 +191,9 @@ async def shutdown_event():
     # 关闭数据库连接
     await redis_client.disconnect()
     await mongo_client.disconnect()
+    
+    # 停止WebSocket管理器的清理任务
+    await websocket_manager.stop()
     
     logger.info("资源清理完成，应用已安全关闭")
 
@@ -341,14 +361,34 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         })
                         continue
                     
-                    # 处理普通消息
-                    result = await message_service.process_message(room_id, message_data, user_id)
+                    # 处理所有普通消息
+                    logger.info(f"收到WebSocket消息: {message_data}")
+                    
+                    # 确保消息包含必要字段
+                    if "room_id" not in message_data:
+                        message_data["room_id"] = room_id
+                    
+                    if "user_id" not in message_data:
+                        message_data["user_id"] = user_id
+                    
+                    # 根据消息类型处理
+                    if message_data.get("type") == "secret":
+                        logger.info("处理秘密消息")
+                        result = await message_service.process_secret_message(room_id, message_data, user_id)
+                    else:
+                        logger.info("处理普通消息")
+                        result = await message_service.process_message(message_data)
+                    
+                    # 检查处理结果
+                    logger.info(f"消息处理结果: {result}")
                     
                     # 如果处理失败，发送错误响应
-                    if not result["success"]:
+                    if not result.get("success", False):
+                        error_msg = result.get("message", "处理消息失败")
+                        logger.error(f"消息处理失败: {error_msg}")
                         await websocket.send_json({
                             "type": "error",
-                            "message": result["message"],
+                            "message": error_msg,
                             "timestamp": int(time.time() * 1000)
                         })
                         
@@ -361,12 +401,12 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     })
                     
             except Exception as e:
-                logger.info(f"处理WebSocket消息时出错: {str(e)}")
+                logger.error(f"处理WebSocket消息时出错: {str(e)}")
                 # 发送错误信息但不断开连接
                 try:
                     await websocket.send_json({
                         "type": "error",
-                        "message": "服务器处理消息时出错",
+                        "message": f"服务器处理消息时出错: {str(e)}",
                         "timestamp": int(time.time() * 1000)
                     })
                 except:

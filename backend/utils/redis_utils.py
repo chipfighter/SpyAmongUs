@@ -26,8 +26,9 @@ Methods:
         - 添加消息、添加消息到secret channel
         - 获取消息列表、获取secret_channel消息列表
 
-To-Do:
-    - 修改用户的战绩以及画像
+TODO:
+    1.修改用户的战绩
+    2.修改用户画像
 """
 
 import time
@@ -100,6 +101,23 @@ class RedisClient:
             
         return result
 
+    async def pipeline(self):
+        """获取Redis pipeline对象"""
+        return self._redis.pipeline()
+
+    async def set_nx(self, key: str, value: str, expire: int = None) -> bool:
+        """设置键值对，如果键不存在"""
+        try:
+            pipe = self._redis.pipeline()
+            pipe.setnx(key, value)
+            if expire:
+                pipe.expire(key, expire)
+            results = await pipe.execute()
+            return results[0]  # 返回setnx的结果
+        except Exception as e:
+            logger.error(f"设置NX键值对失败: {str(e)}")
+            return False
+
     # 所有Redis的基础操作
     async def set(self, key: str, value: str, ex: int = None) -> None:
         """设置键值对，可选过期的时间"""
@@ -132,6 +150,13 @@ class RedisClient:
         """检查值是否为集合成员"""
         return await self._redis.sismember(key, value)
 
+    async def hgetall(self, key: str) -> Dict[str, str]:
+        """获取哈希表的所有字段和值"""
+        try:
+            return await self._redis.hgetall(key)
+        except Exception as e:
+            logger.error(f"获取哈希表数据失败: {str(e)}")
+            return {}
 
     # 用户相关
     async def cache_user(self, user_id: str, user_data: dict) -> bool:

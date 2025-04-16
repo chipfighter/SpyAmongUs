@@ -10,8 +10,9 @@ Notes:
     - 更新用户名、更新用户密码、更新用户头像
     - 根据id来查找用户、根据用户名查找用户
 
-To-Do:
-    - 修改用户的战绩以及画像
+TODO:
+    1.修改用户的战绩
+    2.修改用户画像
 """
 
 from typing import Dict, Optional, Any, List, Union

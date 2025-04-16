@@ -14,7 +14,6 @@ from models.message import Message
 from llm.api_pool import api_pool
 from llm.http_client import generate
 from utils.logger_utils import get_logger
-from config import LLM_CONTEXT_NORMAL_CHAT
 from llm.prompts_manager import PromptsManager
 
 # 创建全局实例
