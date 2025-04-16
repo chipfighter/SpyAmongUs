@@ -47,16 +47,17 @@ export const useUserStore = defineStore('user', {
     
     saveUserData() {
       if (this.accessToken) {
+        // 统一使用accessToken作为key
         localStorage.setItem('accessToken', this.accessToken)
+        localStorage.setItem('token', this.accessToken)  // 为了兼容性保留
         localStorage.setItem('refreshToken', this.refreshToken || '')
         localStorage.setItem('userData', JSON.stringify(this.user))
         localStorage.setItem('lastActivityTime', this.lastActivityTime.toString())
-        // 确保token与路由守卫匹配
-        localStorage.setItem('token', this.accessToken)
         // 同时将userInfo存储为与RoomView中使用的格式一致
         localStorage.setItem('userInfo', JSON.stringify({
           id: this.user.id,
           username: this.user.username,
+          user_name: this.user.username,
           avatar_url: this.user.avatar_url
         }))
       }
@@ -96,6 +97,7 @@ export const useUserStore = defineStore('user', {
           this.user = {
             id: data.id,
             username: data.username,
+            user_name: data.username,
             avatar_url: data.avatar_url,
             status: data.status,
             current_room: data.current_room,
@@ -136,19 +138,20 @@ export const useUserStore = defineStore('user', {
           const { data } = response.data;
           // 解构需要的用户数据
           this.user = {
-            id: data.id,
-            username: data.username,
-            avatar_url: data.avatar_url,
-            status: data.status,
-            current_room: data.current_room,
-            statistics: data.statistics || {},
-            style_profile: data.style_profile || {}
+            id: data.user_data.id,
+            username: data.user_data.username,
+            user_name: data.user_data.username,
+            avatar_url: data.user_data.avatar_url,
+            status: data.user_data.status,
+            current_room: data.user_data.current_room,
+            statistics: data.user_data.statistics || {},
+            style_profile: data.user_data.style_profile || {}
           }
-          this.accessToken = data.access_token
-          this.refreshToken = data.refresh_token
+          this.accessToken = data.user_data.access_token
+          this.refreshToken = data.user_data.refresh_token
           
           // 同时设置localStorage中的token键，以匹配路由守卫
-          localStorage.setItem('token', data.access_token)
+          localStorage.setItem('token', data.user_data.access_token)
           
           this.updateActivityTime()
           this.saveUserData()
@@ -308,7 +311,9 @@ export const useUserStore = defineStore('user', {
         if (response.data.success) {
           // 更新access token
           this.accessToken = response.data.data.access_token
+          // 同时更新两个key
           localStorage.setItem('accessToken', this.accessToken)
+          localStorage.setItem('token', this.accessToken)
           this.updateActivityTime()
           console.log('访问令牌刷新成功')
           return true

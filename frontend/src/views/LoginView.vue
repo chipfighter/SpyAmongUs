@@ -64,23 +64,34 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, getCurrentInstance } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/userStore'
 
 const router = useRouter()
 const userStore = useUserStore()
+const { proxy } = getCurrentInstance()
 
 const username = ref('')
 const password = ref('')
 const showPassword = ref(false)
 
 async function handleLogin() {
-  if (!username.value || !password.value) return
-  
-  const success = await userStore.login(username.value, password.value)
-  if (success) {
-    router.push('/lobby')
+  try {
+    // 清除之前的错误
+    proxy.$errorHandler.clearError(userStore)
+    
+    if (!username.value || !password.value) {
+      proxy.$errorHandler.showError(userStore, new Error('请输入用户名和密码'))
+      return
+    }
+    
+    const success = await userStore.login(username.value, password.value)
+    if (success) {
+      router.push('/lobby')
+    }
+  } catch (error) {
+    proxy.$errorHandler.showError(userStore, error)
   }
 }
 </script>

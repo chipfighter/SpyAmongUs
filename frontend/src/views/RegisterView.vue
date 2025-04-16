@@ -87,12 +87,13 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, getCurrentInstance } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/userStore'
 
 const router = useRouter()
 const userStore = useUserStore()
+const { proxy } = getCurrentInstance()
 
 const username = ref('')
 const password = ref('')
@@ -106,12 +107,26 @@ const passwordMismatch = computed(() => {
 })
 
 async function handleRegister() {
-  if (!username.value || !password.value || !confirmPassword.value) return
-  if (passwordMismatch.value) return
-  
-  const success = await userStore.register(username.value, password.value)
-  if (success) {
-    router.push('/lobby')
+  try {
+    // 清除之前的错误
+    proxy.$errorHandler.clearError(userStore)
+    
+    if (!username.value || !password.value || !confirmPassword.value) {
+      proxy.$errorHandler.showError(userStore, new Error('所有字段都必须填写'))
+      return
+    }
+    
+    if (passwordMismatch.value) {
+      proxy.$errorHandler.showError(userStore, new Error('两次输入的密码不匹配'))
+      return
+    }
+    
+    const success = await userStore.register(username.value, password.value)
+    if (success) {
+      router.push('/lobby')
+    }
+  } catch (error) {
+    proxy.$errorHandler.showError(userStore, error)
   }
 }
 </script>

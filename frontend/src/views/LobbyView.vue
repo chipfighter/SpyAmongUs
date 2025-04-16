@@ -226,7 +226,7 @@ async function refreshRooms() {
     const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/rooms/refresh_public_room`, {
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
+        'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
       }
     });
     
@@ -320,7 +320,7 @@ async function createRoom() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
+        'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
       },
       body: JSON.stringify(roomData.value)
     })
@@ -361,7 +361,7 @@ async function joinRoom(inviteCode) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
+        'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
       }
     })
     

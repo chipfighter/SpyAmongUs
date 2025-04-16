@@ -6,6 +6,47 @@ import router from './router'
 import { API_URL } from '@/config'
 
 // --------------------------------------------------
+// 全局错误处理工具
+// --------------------------------------------------
+
+const errorHandler = {
+  // 显示错误消息（可以在组件中调用）
+  showError(component, error, defaultMessage = '操作失败，请稍后再试') {
+    // 提取错误信息
+    const errorMessage = error?.response?.data?.message || error?.message || defaultMessage;
+    
+    // 记录到控制台
+    console.error('操作错误:', errorMessage, error);
+    
+    // 设置组件的错误状态（如果组件有对应字段）
+    if (component.error !== undefined) {
+      component.error = errorMessage;
+    }
+    if (component.formError !== undefined) {
+      component.formError = errorMessage;
+    }
+    
+    // 如果是响应错误且状态码为401，则重定向到登录页
+    if (error?.response?.status === 401) {
+      console.warn('认证失败，重定向到登录页');
+      router.push('/login');
+    }
+    
+    return errorMessage;
+  },
+  
+  // 清除错误消息
+  clearError(component) {
+    if (component.error !== undefined) {
+      component.error = null;
+    }
+    if (component.formError !== undefined) {
+      component.formError = null;
+    }
+  }
+};
+
+// --------------------------------------------------
 // API分类和配置
 // --------------------------------------------------
 
@@ -102,9 +143,11 @@ axios.interceptors.response.use(
       
       // 清除所有用户相关存储
       localStorage.removeItem('accessToken')
+      localStorage.removeItem('token')  // 同时清除兼容性key
       localStorage.removeItem('refreshToken')
       localStorage.removeItem('userData')
       localStorage.removeItem('lastActivityTime')
+      localStorage.removeItem('userInfo')
       
       // 重定向到登录页
       router.push('/login')
@@ -120,6 +163,9 @@ axios.interceptors.response.use(
 
 const pinia = createPinia()
 const app = createApp(App)
+
+// 全局提供错误处理工具
+app.config.globalProperties.$errorHandler = errorHandler
 
 app.use(pinia)
 app.use(router)

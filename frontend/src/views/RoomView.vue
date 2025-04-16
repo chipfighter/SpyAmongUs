@@ -88,6 +88,14 @@
               <div class="message-time">{{ formatTimestamp(msg.timestamp) }}</div>
             </div>
             
+            <!-- AI流式消息 -->
+            <ai-stream-message
+              v-else-if="msg.type === 'ai_stream'"
+              :content="msg.content"
+              :is-streaming="msg.isStreaming"
+              :timestamp="msg.timestamp"
+            />
+            
             <!-- 用户消息 -->
             <div v-else :class="['user-message', msg.user_id === currentUser.id ? 'self-message' : '']">
               <!-- 其他用户消息 (左侧) -->
@@ -122,16 +130,17 @@
         <!-- 输入框 -->
         <div class="input-container" @click="focusInput">
           <div class="input-wrapper">
-            <input 
-              type="text" 
+            <textarea 
               v-model="newMessage" 
-              @keyup.enter="handleEnterKey"
+              @keydown.enter="handleEnterKey"
               @input="handleInput"
               @keydown="handleMentionNavigation"
               placeholder="输入消息..." 
               :disabled="connectionStatus !== 'connected'"
               ref="messageInput"
-            />
+              class="message-textarea"
+              rows="1"
+            ></textarea>
             
             <!-- @用户列表弹出框 -->
             <div v-if="showMentionPopup" class="mention-popup">
@@ -139,7 +148,7 @@
               <div 
                 v-if="showAiAssistant" 
                 :class="['mention-item', { 'active': selectedMentionIndex === 0 }]"
-                @click="selectMention({ id: 'ai_assistant', username: 'AI助理' })"
+                @click="selectMention({ id: 'ai_assistant', user_name: 'AI助理' })"
               >
                 <div class="mention-avatar">
                   <img src="/default_room_robot_avatar.jpg" alt="AI助理">
@@ -160,7 +169,7 @@
                 <div class="mention-avatar">
                   <img :src="user.avatar_url || '/default_avatar.jpg'" alt="用户头像">
                 </div>
-                <div class="mention-name">{{ user.username }}</div>
+                <div class="mention-name">{{ user.user_name || user.username }}</div>
               </div>
             </div>
           </div>
@@ -188,7 +197,7 @@
               <span v-if="user.id === roomInfo.host_id" class="host-badge">房主</span>
             </div>
             <div class="user-name">
-              {{ user.username }}
+              {{ user.user_name || user.username }}
               <span v-if="readyUsers.includes(user.id)" class="ready-badge">准备</span>
             </div>
           </div>
@@ -276,7 +285,7 @@
               :class="{ selected: selectedTargets.includes(user.id) }"
               @click="toggleTargetUser(user.id)"
             >
-              {{ user.username }}
+              {{ user.user_name || user.username }}
             </div>
           </div>
         </div>
@@ -319,8 +328,13 @@
 </template>
 
 <script>
+import AiStreamMessage from '../components/AiStreamMessage.vue'
+
 export default {
   name: 'RoomView',
+  components: {
+    AiStreamMessage
+  },
   data() {
     return {
       roomInfo: {
@@ -374,7 +388,13 @@ export default {
       gameStarted: false,
       isReady: false,
       readyUsers: [],
-      isUserListCollapsed: false
+      isUserListCollapsed: false,
+      currentAiMessage: {
+        content: '',
+        isStreaming: false,
+        timestamp: 0
+      },
+      currentAiStreamSession: null
     }
   },
   computed: {
@@ -962,66 +982,105 @@ export default {
     handleWebSocketMessage(data) {
       console.log('收到WebSocket消息:', data);
       
-      // 根据消息类型处理不同的消息
-      if (data.type === 'system') {
-        // 处理系统消息
-        if (!data.content && !data.message) return; // 避免空系统消息
-        
-        this.messages.push({
-          is_system: true,
-          content: data.content || data.message,
-          timestamp: data.timestamp || Date.now()
-        });
-        
-        // 检查是否为游戏开始消息
-        if ((data.content && data.content.includes('游戏开始')) || 
-            (data.message && data.message.includes('游戏开始'))) {
-          this.gameStarted = true;
-        }
-      } else if (data.type === 'secret') {
-        // 处理秘密消息
-        if (!data.content || data.content.trim() === '') return; // 避免空秘密消息
-        
-        this.secretMessages.push(data);
-      } else if (data.type === 'chat') {
-        // 处理普通聊天消息
-        if (!data.content || data.content.trim() === '') return; // 避免空聊天消息
-        
-        // 添加解析后的HTML内容
-        data.parsedContent = this.parseMentions(data.content);
-        this.messages.push(data);
-      } else if (data.type === 'user_join' || data.type === 'user_leave') {
-        // 处理用户加入/离开消息
-        // 刷新用户列表
-        this.getRoomUsers();
-        
-        // 添加系统通知
-        if (data.content || data.message) {
-          this.messages.push({
-            is_system: true,
-            content: data.content || data.message,
-            timestamp: data.timestamp || Date.now()
-          });
-        }
-      } else if (data.type === 'ready_status') {
-        // 处理用户准备状态更新
-        if (data.user_id && data.is_ready !== undefined) {
-          const userId = data.user_id;
-          const isReady = data.is_ready;
+      // 处理AI流式消息
+      if (data.type === 'ai_stream') {
+        // 如果是开始消息，创建新会话
+        if (data.is_start) {
+          // 收到开始标记，创建或重置会话ID
+          this.currentAiStreamSession = data.session_id || `ai_session_fallback_${Date.now()}`;
+          console.log('开始新AI流式会话:', this.currentAiStreamSession);
           
-          if (isReady) {
-            // 添加用户到准备列表
-            if (!this.readyUsers.includes(userId)) {
-              this.readyUsers.push(userId);
+          // 创建新的AI消息对象
+          const newAiMessage = {
+            id: this.currentAiStreamSession,
+            type: 'ai_stream',
+            content: data.content || '',
+            isStreaming: true,
+            timestamp: data.timestamp || Date.now(),
+            sessionId: this.currentAiStreamSession
+          };
+          
+          // 添加到消息列表
+          this.messages.push(newAiMessage);
+        } 
+        // 非开始消息，需要查找现有会话
+        else {
+          // 如果消息带有session_id，使用它来查找对应消息
+          const sessionId = data.session_id || this.currentAiStreamSession;
+          
+          if (!sessionId) {
+            console.error('无法处理AI流式消息：没有会话ID');
+            return;
+          }
+          
+          // 查找对应会话的消息
+          const aiMessage = this.messages.find(msg => 
+            msg.type === 'ai_stream' && 
+            (msg.sessionId === sessionId || msg.id === sessionId)
+          );
+          
+          if (aiMessage) {
+            // 更新现有消息
+            if (data.content) {
+              aiMessage.content += data.content;
+            }
+            
+            // 如果是结束消息，立即标记流式显示结束
+            if (data.is_end) {
+              console.log('AI流式会话结束:', sessionId);
+              // 使用Vue的nextTick确保DOM更新
+              this.$nextTick(() => {
+                aiMessage.isStreaming = false;
+              });
+              this.currentAiStreamSession = null;
             }
           } else {
-            // 从准备列表中移除用户
-            const index = this.readyUsers.indexOf(userId);
-            if (index !== -1) {
-              this.readyUsers.splice(index, 1);
+            console.error('找不到AI流式会话:', sessionId);
+            
+            // 尝试查找最后一条AI消息作为备选
+            const lastAiMessage = [...this.messages].reverse().find(msg => msg.type === 'ai_stream');
+            
+            if (lastAiMessage) {
+              // 将内容追加到最后一条AI消息
+              if (data.content) {
+                lastAiMessage.content += data.content;
+              }
+              
+              // 如果是结束消息，立即标记流式显示结束
+              if (data.is_end) {
+                console.log('AI流式会话结束(使用最后一条消息):', lastAiMessage.id);
+                this.$nextTick(() => {
+                  lastAiMessage.isStreaming = false;
+                });
+                this.currentAiStreamSession = null;
+              }
+            } else {
+              // 没有找到任何AI消息，创建一个新的
+              const newAiMessage = {
+                id: sessionId || `ai_session_${Date.now()}`,
+                type: 'ai_stream',
+                content: data.content || '',
+                isStreaming: !data.is_end,
+                timestamp: data.timestamp || Date.now(),
+                sessionId: sessionId
+              };
+              
+              this.messages.push(newAiMessage);
+              
+              if (!data.is_end) {
+                this.currentAiStreamSession = sessionId;
+              }
             }
           }
         }
+        
+        // 自动滚动到底部
+        this.$nextTick(() => {
+          if (this.$refs.messagesContainer) {
+            this.$refs.messagesContainer.scrollTop = this.$refs.messagesContainer.scrollHeight;
+          }
+        });
+        return;
       } else if (data.type === 'game_start') {
         // 处理游戏开始消息
         this.gameStarted = true;
@@ -1097,8 +1156,33 @@ export default {
         return;
       }
       
-      // 检查消息是否包含@AI助理，如果是，则处理AI回复
-      const containsAiMention = this.newMessage.includes('@[ai_assistant:AI助理]');
+      // 提取消息中的所有@提及
+      const mentions = [];
+      const mentionRegex = /@\[([^:]+):([^\]]+)\]/g;
+      let match;
+      let aiType = null;
+      
+      while ((match = mentionRegex.exec(this.newMessage)) !== null) {
+        const userId = match[1];
+        const username = match[2];
+        
+        // 判断是否是AI助理
+        if (userId === 'ai_assistant') {
+          aiType = 'deepseekv3'; // 默认AI类型，后续可扩展
+          mentions.push({
+            id: userId,
+            name: username
+          });
+        } else {
+          mentions.push({
+            id: userId,
+            name: username
+          });
+        }
+      }
+      
+      // 检查消息是否包含@AI助理
+      const containsAiMention = aiType !== null;
       
       const message = {
         type: 'chat',
@@ -1106,8 +1190,14 @@ export default {
         user_id: this.currentUser.id,
         user_name: this.currentUser.username,
         timestamp: Date.now(),
-        mention_ai: containsAiMention
+        is_system: false,
+        round: "0", // 默认回合设置为"0"
+        mentions: mentions,
+        ai_type: aiType,
+        room_id: this.roomInfo.invite_code // 添加房间ID
       };
+      
+      console.log("发送消息:", JSON.stringify(message));
       
       try {
         this.websocket.send(JSON.stringify(message));
@@ -1151,9 +1241,14 @@ export default {
         content: this.newSecretMessage.trim(),
         user_id: this.currentUser.id,
         user_name: this.currentUser.username,
+        timestamp: Date.now(),
+        is_system: false,
+        round: "0",
         target_users: this.selectedTargets,
-        timestamp: Date.now()
+        room_id: this.roomInfo.invite_code
       };
+      
+      console.log("发送秘密消息:", JSON.stringify(message));
       
       try {
         this.websocket.send(JSON.stringify(message));
@@ -1308,6 +1403,13 @@ export default {
       const text = this.newMessage;
       const lastAtSignIndex = text.lastIndexOf('@');
       
+      // 自动调整高度
+      const textarea = this.$refs.messageInput;
+      if (textarea) {
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(150, textarea.scrollHeight) + 'px';
+      }
+      
       if (lastAtSignIndex !== -1) {
         const textAfterAt = text.substring(lastAtSignIndex + 1);
         // 检查@后面是否有空格或已经选择了用户（包含]字符）
@@ -1333,7 +1435,8 @@ export default {
       const query = this.mentionQuery.toLowerCase();
       this.filteredMentionUsers = this.roomUsers.filter(user => 
         user.id !== this.currentUser.id && 
-        user.username.toLowerCase().includes(query)
+        user.username.toLowerCase().includes(query) &&
+        (user.user_name && user.user_name.toLowerCase().includes(query))
       );
       
       // 是否显示AI助理
@@ -1363,7 +1466,7 @@ export default {
         // Tab键也可以选择
         event.preventDefault();
         if (this.showAiAssistant && this.selectedMentionIndex === 0) {
-          this.selectMention({ id: 'ai_assistant', username: 'AI助理' });
+          this.selectMention({ id: 'ai_assistant', user_name: 'AI助理' });
         } else {
           const userIndex = this.showAiAssistant ? this.selectedMentionIndex - 1 : this.selectedMentionIndex;
           if (userIndex >= 0 && userIndex < this.filteredMentionUsers.length) {
@@ -1377,7 +1480,7 @@ export default {
       // 选择用户后在输入框中插入@用户标记
       const beforeMention = this.newMessage.substring(0, this.mentionStartIndex);
       const afterMention = this.newMessage.substring(this.mentionStartIndex + this.mentionQuery.length + 1);
-      this.newMessage = `${beforeMention}@[${user.id}:${user.username}] ${afterMention}`;
+      this.newMessage = `${beforeMention}@[${user.id}:${user.user_name || user.username}] ${afterMention}`;
       
       // 关闭弹出框
       this.showMentionPopup = false;
@@ -1394,7 +1497,7 @@ export default {
         // 如果显示@用户列表，Enter键用于选择用户
         event.preventDefault();
         if (this.showAiAssistant && this.selectedMentionIndex === 0) {
-          this.selectMention({ id: 'ai_assistant', username: 'AI助理' });
+          this.selectMention({ id: 'ai_assistant', user_name: 'AI助理' });
         } else {
           const userIndex = this.showAiAssistant ? this.selectedMentionIndex - 1 : this.selectedMentionIndex;
           if (userIndex >= 0 && userIndex < this.filteredMentionUsers.length) {
@@ -1402,8 +1505,12 @@ export default {
           }
         }
       } else {
-        // 如果没有显示@用户列表，Enter键用于发送消息
-        this.sendMessage();
+        // Shift+Enter用于换行，普通Enter用于发送消息
+        if (!event.shiftKey) {
+          event.preventDefault(); // 阻止默认的换行
+          this.sendMessage();
+        }
+        // 如果按下Shift+Enter，不做处理，textarea会自动换行
       }
     },
     
@@ -1798,6 +1905,23 @@ export default {
   border-radius: 4px;
   outline: none;
   font-size: 1rem;
+}
+
+.input-container textarea {
+  flex: 1;
+  border: none;
+  padding: 10px 15px;
+  border-radius: 4px;
+  outline: none;
+  font-size: 1rem;
+  resize: none;
+  overflow-y: auto;
+  min-height: 40px;
+  max-height: 150px;
+  width: 100%;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.4;
 }
 
 .input-container button {
@@ -2392,5 +2516,10 @@ export default {
   padding: 1px 4px;
   border-radius: 3px;
   margin-left: 5px;
+}
+
+/* AI流式消息相关样式 */
+.ai-stream-message {
+  margin: 10px 0;
 }
 </style> 
