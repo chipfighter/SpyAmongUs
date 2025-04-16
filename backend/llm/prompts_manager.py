@@ -159,7 +159,7 @@ MESSAGE_FORMAT = """
     {
         timestamp: 发送时间 (Unix 时间戳，毫秒)
         user_id: 发送者ID
-        user_name: 发送者用户名
+        username: 发送者用户名
         content: 消息内容
         is_system: 是否为系统消息 (True/False)
         round: 所属回合 ("0"表示游戏未开始，"round_x"表示第x回合)

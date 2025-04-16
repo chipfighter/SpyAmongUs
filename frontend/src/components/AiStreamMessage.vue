@@ -54,6 +54,7 @@ export default {
       // 处理换行和空格
       if (!this.processedContent) return '';
       
+      // 确保最终输出时也进行多余空行过滤
       return this.processedContent
         .replace(/\n{3,}/g, '\n\n') // 额外保险：将3个及以上连续换行符替换为2个
         .replace(/\n/g, '<br>')
@@ -72,9 +73,10 @@ export default {
         
         // 首次接收内容
         if (!oldContent) {
-          this.processedContent = newContent;
+          // 预处理初始内容，移除多余空行
+          this.processedContent = newContent.replace(/\n{3,}/g, '\n\n');
           // 保存结尾字符
-          this.lastEndChars = newContent.slice(-3);
+          this.lastEndChars = this.processedContent.slice(-3);
           return;
         }
         
@@ -95,6 +97,9 @@ export default {
           // 无需特殊处理，直接追加新内容
           this.processedContent += newChunk;
         }
+        
+        // 额外的全局处理确保整个内容没有多余空行
+        this.processedContent = this.processedContent.replace(/\n{3,}/g, '\n\n');
         
         // 更新缓冲区
         this.lastEndChars = this.processedContent.slice(-3);

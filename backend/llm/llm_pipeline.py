@@ -45,7 +45,7 @@ class LLM_Pipeline:
             # 判断是否为系统消息
             prefix = "[系统] " if msg.is_system else ""
             # 添加时间戳和用户名
-            history += f"{prefix}[{msg.timestamp}] {msg.user_name}: {msg.content}\n"
+            history += f"{prefix}[{msg.timestamp}] {msg.username}: {msg.content}\n"
             
         return history
 

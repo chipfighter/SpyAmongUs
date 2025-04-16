@@ -57,7 +57,7 @@
             {{ msg.content }}
           </div>
           <div v-else class="mini-user-message">
-            <span class="mini-username">{{ msg.user_name }}:</span>
+            <span class="mini-username">{{ msg.username }}:</span>
             <span class="mini-content">{{ msg.content }}</span>
           </div>
         </div>
@@ -104,7 +104,7 @@
                   <img :src="getUserAvatar(msg.user_id)" alt="用户头像">
                 </div>
                 <div class="message-content">
-                  <div class="username">{{ msg.user_name }}</div>
+                  <div class="username">{{ msg.username }}</div>
                   <div class="text" v-if="msg.parsedContent" v-html="msg.parsedContent"></div>
                   <div class="text" v-else>{{ msg.content }}</div>
                   <div class="message-time">{{ formatTimestamp(msg.timestamp) }}</div>
@@ -114,7 +114,7 @@
               <!-- 自己的消息 (右侧) -->
               <template v-else>
                 <div class="message-content self">
-                  <div class="username">{{ msg.user_name }}</div>
+                  <div class="username">{{ msg.username }}</div>
                   <div class="text" v-if="msg.parsedContent" v-html="msg.parsedContent"></div>
                   <div class="text" v-else>{{ msg.content }}</div>
                   <div class="message-time">{{ formatTimestamp(msg.timestamp) }}</div>
@@ -148,7 +148,7 @@
               <div 
                 v-if="showAiAssistant" 
                 :class="['mention-item', { 'active': selectedMentionIndex === 0 }]"
-                @click="selectMention({ id: 'ai_assistant', user_name: 'AI助理' })"
+                @click="selectMention({ id: 'ai_assistant', username: 'AI助理' })"
               >
                 <div class="mention-avatar">
                   <img src="/default_room_robot_avatar.jpg" alt="AI助理">
@@ -169,7 +169,7 @@
                 <div class="mention-avatar">
                   <img :src="user.avatar_url || '/default_avatar.jpg'" alt="用户头像">
                 </div>
-                <div class="mention-name">{{ user.user_name || user.username }}</div>
+                <div class="mention-name">{{ user.username || user.username }}</div>
               </div>
             </div>
           </div>
@@ -197,7 +197,7 @@
               <span v-if="user.id === roomInfo.host_id" class="host-badge">房主</span>
             </div>
             <div class="user-name">
-              {{ user.user_name || user.username }}
+              {{ user.username || user.username }}
               <span v-if="readyUsers.includes(user.id)" class="ready-badge">准备</span>
             </div>
           </div>
@@ -253,7 +253,7 @@
                   <img :src="getUserAvatar(msg.user_id)" alt="用户头像">
                 </div>
                 <div class="message-content">
-                  <div class="username">{{ msg.user_name }}</div>
+                  <div class="username">{{ msg.username }}</div>
                   <div class="text">{{ msg.content }}</div>
                   <div class="message-time">{{ formatTimestamp(msg.timestamp) }}</div>
                 </div>
@@ -262,7 +262,7 @@
               <!-- 自己的消息 (右侧) -->
               <template v-else>
                 <div class="message-content self">
-                  <div class="username">{{ msg.user_name }}</div>
+                  <div class="username">{{ msg.username }}</div>
                   <div class="text">{{ msg.content }}</div>
                   <div class="message-time">{{ formatTimestamp(msg.timestamp) }}</div>
                 </div>
@@ -285,7 +285,7 @@
               :class="{ selected: selectedTargets.includes(user.id) }"
               @click="toggleTargetUser(user.id)"
             >
-              {{ user.user_name || user.username }}
+              {{ user.username || user.username }}
             </div>
           </div>
         </div>
@@ -1019,22 +1019,7 @@ export default {
             (msg.sessionId === sessionId || msg.id === sessionId)
           );
           
-          if (aiMessage) {
-            // 更新现有消息
-            if (data.content) {
-              aiMessage.content += data.content;
-            }
-            
-            // 如果是结束消息，立即标记流式显示结束
-            if (data.is_end) {
-              console.log('AI流式会话结束:', sessionId);
-              // 使用Vue的nextTick确保DOM更新
-              this.$nextTick(() => {
-                aiMessage.isStreaming = false;
-              });
-              this.currentAiStreamSession = null;
-            }
-          } else {
+          if (!aiMessage) {
             console.error('找不到AI流式会话:', sessionId);
             
             // 尝试查找最后一条AI消息作为备选
@@ -1046,12 +1031,9 @@ export default {
                 lastAiMessage.content += data.content;
               }
               
-              // 如果是结束消息，立即标记流式显示结束
+              // 如果是结束消息，标记流式显示结束
               if (data.is_end) {
-                console.log('AI流式会话结束(使用最后一条消息):', lastAiMessage.id);
-                this.$nextTick(() => {
-                  lastAiMessage.isStreaming = false;
-                });
+                lastAiMessage.isStreaming = false;
                 this.currentAiStreamSession = null;
               }
             } else {
@@ -1071,6 +1053,21 @@ export default {
                 this.currentAiStreamSession = sessionId;
               }
             }
+            
+            // 处理完毕，返回
+            return;
+          }
+          
+          // 更新现有消息
+          if (data.content) {
+            aiMessage.content += data.content;
+          }
+          
+          // 如果是结束消息，标记流式显示结束
+          if (data.is_end) {
+                  aiMessage.isStreaming = false;
+                this.currentAiStreamSession = null;
+                console.log('AI流式会话结束:', aiMessage.sessionId || aiMessage.id);
           }
         }
         
@@ -1081,6 +1078,68 @@ export default {
           }
         });
         return;
+      }
+      
+      // 其他类型消息的处理保持不变
+      if (data.type === 'system') {
+        // 处理系统消息
+        if (!data.content && !data.message) return; // 避免空系统消息
+        
+        this.messages.push({
+          is_system: true,
+          content: data.content || data.message,
+          timestamp: data.timestamp || Date.now()
+        });
+        
+        // 检查是否为游戏开始消息
+        if ((data.content && data.content.includes('游戏开始')) || 
+            (data.message && data.message.includes('游戏开始'))) {
+          this.gameStarted = true;
+        }
+      } else if (data.type === 'secret') {
+        // 处理秘密消息
+        if (!data.content || data.content.trim() === '') return; // 避免空秘密消息
+        
+        this.secretMessages.push(data);
+      } else if (data.type === 'chat') {
+        // 处理普通聊天消息
+        if (!data.content || data.content.trim() === '') return; // 避免空聊天消息
+        
+        // 添加解析后的HTML内容
+        data.parsedContent = this.parseMentions(data.content);
+        this.messages.push(data);
+      } else if (data.type === 'user_join' || data.type === 'user_leave') {
+        // 处理用户加入/离开消息
+        // 刷新用户列表
+        this.getRoomUsers();
+        
+        // 添加系统通知
+        if (data.content || data.message) {
+          this.messages.push({
+            is_system: true,
+            content: data.content || data.message,
+            timestamp: data.timestamp || Date.now()
+          });
+        }
+      } else if (data.type === 'ready_status') {
+        // 处理用户准备状态更新
+        if (data.user_id && data.is_ready !== undefined) {
+          const userId = data.user_id;
+          const isReady = data.is_ready;
+          
+          if (isReady) {
+            // 添加用户到准备列表
+            if (!this.readyUsers.includes(userId)) {
+              this.readyUsers.push(userId);
+              }
+            } else {
+            // 从准备列表中移除用户
+            const index = this.readyUsers.indexOf(userId);
+            if (index !== -1) {
+              this.readyUsers.splice(index, 1);
+            }
+          }
+        }
       } else if (data.type === 'game_start') {
         // 处理游戏开始消息
         this.gameStarted = true;
@@ -1188,7 +1247,7 @@ export default {
         type: 'chat',
         content: this.newMessage.trim(),
         user_id: this.currentUser.id,
-        user_name: this.currentUser.username,
+        username: this.currentUser.username,
         timestamp: Date.now(),
         is_system: false,
         round: "0", // 默认回合设置为"0"
@@ -1240,7 +1299,7 @@ export default {
         type: 'secret',
         content: this.newSecretMessage.trim(),
         user_id: this.currentUser.id,
-        user_name: this.currentUser.username,
+        username: this.currentUser.username,
         timestamp: Date.now(),
         is_system: false,
         round: "0",
@@ -1436,7 +1495,7 @@ export default {
       this.filteredMentionUsers = this.roomUsers.filter(user => 
         user.id !== this.currentUser.id && 
         user.username.toLowerCase().includes(query) &&
-        (user.user_name && user.user_name.toLowerCase().includes(query))
+        (user.username && user.username.toLowerCase().includes(query))
       );
       
       // 是否显示AI助理
@@ -1466,7 +1525,7 @@ export default {
         // Tab键也可以选择
         event.preventDefault();
         if (this.showAiAssistant && this.selectedMentionIndex === 0) {
-          this.selectMention({ id: 'ai_assistant', user_name: 'AI助理' });
+          this.selectMention({ id: 'ai_assistant', username: 'AI助理' });
         } else {
           const userIndex = this.showAiAssistant ? this.selectedMentionIndex - 1 : this.selectedMentionIndex;
           if (userIndex >= 0 && userIndex < this.filteredMentionUsers.length) {
@@ -1480,7 +1539,7 @@ export default {
       // 选择用户后在输入框中插入@用户标记
       const beforeMention = this.newMessage.substring(0, this.mentionStartIndex);
       const afterMention = this.newMessage.substring(this.mentionStartIndex + this.mentionQuery.length + 1);
-      this.newMessage = `${beforeMention}@[${user.id}:${user.user_name || user.username}] ${afterMention}`;
+      this.newMessage = `${beforeMention}@[${user.id}:${user.username || user.username}] ${afterMention}`;
       
       // 关闭弹出框
       this.showMentionPopup = false;
@@ -1491,28 +1550,28 @@ export default {
       });
     },
     
-    // 处理Enter键的不同功能
-    handleEnterKey(event) {
-      if (this.showMentionPopup) {
-        // 如果显示@用户列表，Enter键用于选择用户
-        event.preventDefault();
-        if (this.showAiAssistant && this.selectedMentionIndex === 0) {
-          this.selectMention({ id: 'ai_assistant', user_name: 'AI助理' });
-        } else {
-          const userIndex = this.showAiAssistant ? this.selectedMentionIndex - 1 : this.selectedMentionIndex;
-          if (userIndex >= 0 && userIndex < this.filteredMentionUsers.length) {
-            this.selectMention(this.filteredMentionUsers[userIndex]);
-          }
-        }
-      } else {
-        // Shift+Enter用于换行，普通Enter用于发送消息
-        if (!event.shiftKey) {
-          event.preventDefault(); // 阻止默认的换行
-          this.sendMessage();
-        }
-        // 如果按下Shift+Enter，不做处理，textarea会自动换行
+// 处理Enter键的不同功能
+handleEnterKey(event) {
+  if (this.showMentionPopup) {
+    // 如果显示@用户列表，Enter键用于选择用户
+    event.preventDefault();
+    if (this.showAiAssistant && this.selectedMentionIndex === 0) {
+      this.selectMention({ id: 'ai_assistant', username: 'AI助理' });
+    } else {
+      const userIndex = this.showAiAssistant ? this.selectedMentionIndex - 1 : this.selectedMentionIndex;
+      if (userIndex >= 0 && userIndex < this.filteredMentionUsers.length) {
+        this.selectMention(this.filteredMentionUsers[userIndex]);
       }
-    },
+    }
+  } else {
+    // Shift+Enter用于换行，普通Enter用于发送消息
+    if (!event.shiftKey) {
+      event.preventDefault(); // 阻止默认的换行
+      this.sendMessage();
+    }
+    // 如果按下Shift+Enter，不做处理，textarea会自动换行
+  }
+},
     
     // 处理消息内容中的@标记
     parseMentions(content) {

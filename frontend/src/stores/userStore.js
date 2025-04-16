@@ -57,7 +57,7 @@ export const useUserStore = defineStore('user', {
         localStorage.setItem('userInfo', JSON.stringify({
           id: this.user.id,
           username: this.user.username,
-          user_name: this.user.username,
+          username: this.user.username,
           avatar_url: this.user.avatar_url
         }))
       }
@@ -97,7 +97,7 @@ export const useUserStore = defineStore('user', {
           this.user = {
             id: data.id,
             username: data.username,
-            user_name: data.username,
+            username: data.username,
             avatar_url: data.avatar_url,
             status: data.status,
             current_room: data.current_room,
@@ -140,7 +140,7 @@ export const useUserStore = defineStore('user', {
           this.user = {
             id: data.user_data.id,
             username: data.user_data.username,
-            user_name: data.user_data.username,
+            username: data.user_data.username,
             avatar_url: data.user_data.avatar_url,
             status: data.user_data.status,
             current_room: data.user_data.current_room,

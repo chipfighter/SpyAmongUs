@@ -8,7 +8,7 @@ Notes:
     同时，尽可能保持mongodb的同步方法，先修改redis再修改磁盘mongodb
 
 Methods:
-    - 关于Redis 连接、断开、检查
+    - 关于Redis 连接、断开、检查连接
     - Redis的一系列基础操作
     - 检查用户是否存在、TTL刷新操作
     用户：
@@ -16,14 +16,16 @@ Methods:
         - 根据用户id删除用户
         - 更新用户名、更新用户头像、更新用户状态、更新用户当前房间
         - 根据id来查找用户所有信息
+        - 判断用户是否存在
+        - 刷新用户redis状态（重置TTL监测时间）
     房间：
         - 创建房间
         - 删除房间
         - 修改房间状态、加入新用户、删除房间用户
-        - 查看当前房间的所有用户ID、查看当前房间房主、获取房间基本信息、获取公开房间列表、查看房间是否存在、获取对应房间的人员数量、
-          判断用户是否在房间内
+        - 查看当前房间的所有用户ID、查看当前房间房主、获取房间基本信息、获取公开房间列表、查看当前房间游戏阶段、
+        查看房间是否存在、获取对应房间的人员数量、判断用户是否在房间内
     消息：
-        - 添加消息、添加消息到secret channel
+        - 添加消息到对应房间、添加消息到对应房间的secret channel
         - 获取消息列表、获取secret_channel消息列表
 
 TODO:
@@ -68,6 +70,23 @@ class RedisClient:
             logger.error(f"Redis客户端初始化失败: {str(e)}")
             raise
 
+    def __getattr__(self, name):
+        """动态转发未定义的方法调用到底层Redis客户端"""
+        try:
+            attr = getattr(self._redis, name)
+            if callable(attr):
+                async def wrapper(*args, **kwargs):
+                    try:
+                        return await attr(*args, **kwargs)
+                    except Exception as e:
+                        logger.error(f"Redis操作 {name} 失败: {str(e)}")
+                        raise
+
+                return wrapper
+            return attr
+        except AttributeError:
+            raise AttributeError(f"'RedisClient'对象和底层Redis客户端都没有'{name}'属性")
+
     async def disconnect(self):
         """断开Redis连接"""
         if self._redis:
@@ -101,62 +120,12 @@ class RedisClient:
             
         return result
 
+
+    # 所有Redis的基础操作
     async def pipeline(self):
         """获取Redis pipeline对象"""
         return self._redis.pipeline()
 
-    async def set_nx(self, key: str, value: str, expire: int = None) -> bool:
-        """设置键值对，如果键不存在"""
-        try:
-            pipe = self._redis.pipeline()
-            pipe.setnx(key, value)
-            if expire:
-                pipe.expire(key, expire)
-            results = await pipe.execute()
-            return results[0]  # 返回setnx的结果
-        except Exception as e:
-            logger.error(f"设置NX键值对失败: {str(e)}")
-            return False
-
-    # 所有Redis的基础操作
-    async def set(self, key: str, value: str, ex: int = None) -> None:
-        """设置键值对，可选过期的时间"""
-        if ex:
-            await self._redis.set(key, value, ex=ex)
-        else:
-            await self._redis.set(key, value)
-            
-    async def get(self, key: str) -> Optional[str]:
-        """获取键值"""
-        return await self._redis.get(key)
-        
-    async def delete(self, key: str) -> None:
-        """删除键"""
-        await self._redis.delete(key)
-        
-    async def sadd(self, key: str, *values) -> None:
-        """向集合添加元素"""
-        await self._redis.sadd(key, *values)
-        
-    async def srem(self, key: str, *values) -> None:
-        """从集合移除元素"""
-        await self._redis.srem(key, *values)
-        
-    async def smembers(self, key: str) -> Set[str]:
-        """获取集合所有成员"""
-        return await self._redis.smembers(key)
-        
-    async def sismember(self, key: str, value: str) -> bool:
-        """检查值是否为集合成员"""
-        return await self._redis.sismember(key, value)
-
-    async def hgetall(self, key: str) -> Dict[str, str]:
-        """获取哈希表的所有字段和值"""
-        try:
-            return await self._redis.hgetall(key)
-        except Exception as e:
-            logger.error(f"获取哈希表数据失败: {str(e)}")
-            return {}
 
     # 用户相关
     async def cache_user(self, user_id: str, user_data: dict) -> bool:
@@ -224,7 +193,12 @@ class RedisClient:
             return False
 
     async def get_user(self, user_id: str) -> dict:
-        """获取用户所有缓存信息"""
+        """
+        获取用户所有缓存信息
+
+        Notes:
+            持久化的部分消息是不存在的
+        """
         try:
             user_data = await self._redis.hgetall(f"user:{user_id}")
             return user_data

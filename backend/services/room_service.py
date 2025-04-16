@@ -231,6 +231,106 @@ class RoomService:
                 "message": f"删除房间失败: {str(e)}"
             }
 
+    async def leave_room(self, invite_code: str, user_id: str) -> Dict[str, Any]:
+        """
+        退出房间
+
+        Args:
+            invite_code: 房间邀请码
+            user_id: 用户ID
+
+        Returns:
+            Dict包含操作结果
+        """
+        try:
+            # 1. 检查房间是否存在
+            room_exists = await self.redis_client.check_room_exists(invite_code)
+            if not room_exists:
+                return {
+                    "success": False,
+                    "message": "房间不存在"
+                }
+
+            # 2. 检查用户是否在房间中
+            is_in_room = await self.redis_client.is_user_in_room(invite_code, user_id)
+            if not is_in_room:
+                return {
+                    "success": False,
+                    "message": "您不在该房间中"
+                }
+
+            # 3. 获取房间数据
+            room_data = await self.redis_client.get_room_basic_data(invite_code)
+
+            # 4. 如果是房主，需要特殊处理
+            if room_data.get("host_id") == user_id:
+                # 获取房间中的所有其他用户（真人用户）
+                all_users = await self.redis_client.get_room_users(invite_code)
+                other_users = [u for u in all_users if u != user_id]
+
+                # 如果没有其他用户，直接删除房间
+                if not other_users:
+                    return await self.delete_room(invite_code, user_id)
+
+                # 有其他用户，需要转移房主权限
+                # 这里我们需要按加入顺序获取下一个房主
+                # 假设你的Redis存储了用户加入的时间顺序
+                next_host_id = await self.redis_client.get_next_user_by_join_time(invite_code, exclude_user_id=user_id)
+
+                if not next_host_id:
+                    # 如果无法确定下一个房主，使用第一个其他用户
+                    next_host_id = other_users[0]
+
+                # 更新房间的房主信息
+                await self.redis_client.update_room_host(invite_code, next_host_id)
+
+                # 发送系统消息通知房主变更
+                if self.message_service:
+                    user_info = await self.user_service.get_user_info(user_id)
+                    next_host_info = await self.user_service.get_user_info(next_host_id)
+
+                    former_host_name = user_info["data"].get("username", "前房主") if user_info["success"] else "前房主"
+                    new_host_name = next_host_info["data"].get("username", "新房主") if next_host_info[
+                        "success"] else "新房主"
+
+                    await self.message_service.send_system_message(
+                        room_id=invite_code,
+                        content=f"{former_host_name} 退出了房间，{new_host_name} 成为新的房主"
+                    )
+
+            # 5. 从房间中移除用户
+            success = await self.redis_client.delete_room_user(invite_code, user_id)
+            if not success:
+                return {
+                    "success": False,
+                    "message": "退出房间失败"
+                }
+
+            # 6. 更新用户状态
+            await self.user_service.update_current_room(user_id, None)
+            await self.user_service.update_user_status(user_id, USER_STATUS_ONLINE)
+
+            # 7. 如果不是房主，发送普通的退出消息
+            if room_data.get("host_id") != user_id and self.message_service:
+                user_info = await self.user_service.get_user_info(user_id)
+                username = user_info["data"].get("username", "用户") if user_info["success"] else "用户"
+                await self.message_service.send_system_message(
+                    room_id=invite_code,
+                    content=f"用户 {username} 退出了房间"
+                )
+
+            return {
+                "success": True,
+                "message": "成功退出房间"
+            }
+
+        except Exception as e:
+            logger.error(f"退出房间失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"退出房间失败: {str(e)}"
+            }
+
     async def get_public_rooms(self) -> Dict[str, Any]:
         """
         获取所有公开房间列表

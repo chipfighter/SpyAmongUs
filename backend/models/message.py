@@ -18,7 +18,7 @@ class Message(BaseModel):
     """
     timestamp: int = int(time.time() * 1000)  # 时间戳 (Unix 时间戳, 毫秒)
     user_id: str            # 发送者ID
-    user_name: str          # 发送者用户名 (改名从username为user_name)
+    username: str          # 发送者用户名
     content: str            # 消息内容
     is_system: bool = False # 是否为系统消息
     round: str = "0"        # 所属回合（改为字符串类型）【如果是"0"默认游戏没有开始，游戏开始的回合为"round_x"】
@@ -27,12 +27,12 @@ class Message(BaseModel):
     ai_type: Optional[str] = None  # 被@的AI类型
 
     @classmethod
-    def create_user_message(cls, user_id: str, user_name: str, content: str) -> 'Message':
+    def create_user_message(cls, user_id: str, username: str, content: str) -> 'Message':
         """创建用户消息"""
         return cls(
             timestamp=int(time.time() * 1000),
             user_id=user_id,
-            user_name=user_name,  # 使用user_name
+            username=username,  # 使用username
             content=content,
             is_system=False,
             round="0"  # 使用字符串
@@ -44,7 +44,7 @@ class Message(BaseModel):
         return cls(
             timestamp=int(time.time() * 1000),
             user_id="system",
-            user_name="System",  # 使用user_name
+            username="System",  # 使用username
             content=content,
             is_system=True,
             round="0"  # 使用字符串

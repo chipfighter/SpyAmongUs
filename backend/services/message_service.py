@@ -12,6 +12,7 @@ Notes:
     - data: Optional[Dict]，返回的数据（如果有）
 
 Methods:
+    - AI消息的处理
     - 处理websocket发送过来的消息、处理secret_channel发送的消息
     - 服务端的系统消息发送处理
     - 获取房间的消息、secret_channel消息
@@ -24,54 +25,21 @@ import time
 import asyncio
 import json
 from utils.message_queue_manager import MessageQueueManager
-from utils.ai_lock_manager import AILockManager
+from utils.ai_lock_manager import AIStorageLockManager
 import uuid
 import re
 
 logger = get_logger(__name__)
-
-class MessageCache:
-    """
-    简单的消息缓存类
-
-    Notes:
-        避免太多请求的缓存（基本都是消息历史的格式化处理缓存），需要清理掉一点，当然只能做权宜之计，如果消息量连续同时大过头就会有问题
-    """
-    def __init__(self, max_size=1000):
-        self.cache = {}
-        self.max_size = max_size
-        
-    def get(self, key):
-        return self.cache.get(key)
-        
-    def set(self, key, value):
-        if len(self.cache) >= self.max_size:
-            # 简单的LRU策略：删除最早的键
-            self.cache.pop(next(iter(self.cache)))
-        self.cache[key] = value
 
 class MessageService:
     def __init__(self, redis_client, websocket_manager, llm_service):
         self.redis_client = redis_client
         self.websocket_manager = websocket_manager
         self.llm_service = llm_service
-        self.message_cache = MessageCache()
-        # 每个房间的消息队列
-        self.room_queues = {}
+        # 消息队列
+        self.message_queue_manager = MessageQueueManager(redis_client)
         # 每个房间的AI锁
-        self.room_ai_locks = {}
-        
-    async def _get_room_queue(self, room_id: str):
-        """获取房间的消息队列"""
-        if room_id not in self.room_queues:
-            self.room_queues[room_id] = asyncio.Queue()
-        return self.room_queues[room_id]
-        
-    async def _get_room_ai_lock(self, room_id: str):
-        """获取房间的AI锁"""
-        if room_id not in self.room_ai_locks:
-            self.room_ai_locks[room_id] = asyncio.Lock()
-        return self.room_ai_locks[room_id]
+        self.ai_storage_lock_manager = AIStorageLockManager(redis_client)
 
     async def _validate_message_format(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
         """验证消息格式"""
@@ -134,66 +102,171 @@ class MessageService:
             "message": "消息格式有效"
         }
 
-    async def _stream_ai_response_to_frontend(self, room_id: str, chunk: str, is_start: bool, is_end: bool) -> None:
-        """
-        将AI响应流式传输到前端
 
-        Args:
-            room_id: 房间ID
-            chunk: 消息内容片段
-            is_start: 是否是开始
-            is_end: 是否是结束
+    # 统一消息处理
+    async def process_message(self, message_data: dict) -> dict:
+        """
+        统一消息处理
+
+        Notes:
+            所有房间内普通消息都经过该函数（secret_channel情况除外）
+            如果有@情况和AI相关的消息处理是另外单独逻辑
         """
         try:
-            # 生成时间戳作为唯一ID
-            timestamp = int(time.time() * 1000)
-            
-            # 构造流式消息格式 - 确保只有一个消息会话从开始到结束
-            stream_message = {
-                "timestamp": timestamp,
-                "type": "ai_stream",    #   标识当前是什么情况的AI返回(ai_stream, secret_channel, game_chat)
-                "is_start": is_start,
-                "is_end": is_end,
-                "content": chunk,
-                "session_id": f"ai_session_{room_id}_{timestamp}" if is_start else None  # 仅在开始时创建会话ID
+            logger.info(f"开始处理消息: {message_data}")
+
+            # 验证消息格式
+            validation = await self._validate_message_format(message_data)
+            if not validation["valid"]:
+                logger.error(f"消息格式验证失败: {validation['message']}")
+                return {"success": False, "message": validation["message"]}
+
+            room_id = message_data.get("room_id")
+            user_id = message_data.get("user_id")
+
+            if not room_id:
+                logger.error("消息缺少room_id字段")
+                return {"success": False, "message": "消息缺少room_id字段"}
+
+            if not user_id:
+                logger.error("消息缺少user_id字段")
+                return {"success": False, "message": "消息缺少user_id字段"}
+
+            logger.info(f"将消息添加到Redis队列: {message_data}")
+            await self.message_queue_manager.add_message(room_id, message_data)
+
+            # 启动Redis队列处理器
+            await self.message_queue_manager.start_queue_processor(
+                room_id,
+                self._process_message
+            )
+
+            return {"success": True, "message": "Message queued successfully"}
+
+        except Exception as e:
+            logger.error(f"处理消息失败: {str(e)}")
+            return {"success": False, "message": f"Failed to process message: {str(e)}"}
+
+    async def _process_message(self, room_id: str, message_data: dict) -> None:
+        """处理来自Redis队列的消息"""
+        try:
+            logger.info(f"处理来自Redis队列的消息: {message_data}")
+
+            user_id = message_data.get("user_id")
+            if not user_id:
+                logger.error(f"消息缺少user_id字段: {message_data}")
+                return
+
+            # 检查是否是AI消息
+            contains_ai_mention = False
+            if "mentions" in message_data:
+                logger.info(f"检查mentions字段: {message_data['mentions']}")
+                # 检查mentions数组中是否有ai_assistant
+                contains_ai_mention = any(mention.get('id') == 'ai_assistant' for mention in message_data["mentions"])
+
+            if contains_ai_mention or message_data.get('ai_type'):
+                logger.info("检测到AI提及，尝试获取AI存储锁")
+                # 获取AI存储锁
+                lock_acquired = await self.ai_storage_lock_manager.acquire_storage_lock(room_id)
+                if lock_acquired:
+                    try:
+                        # 锁获取成功，处理AI消息
+                        logger.info(f"获取房间 {room_id} 的AI存储锁成功，处理AI消息")
+                        await self.handle_ai_mention(room_id, message_data, user_id)
+                    finally:
+                        # 确保锁被释放
+                        await self.ai_storage_lock_manager.release_storage_lock(room_id)
+                else:
+                    # 锁获取失败，AI正在处理中，将消息添加到待处理队列
+                    logger.info(f"房间 {room_id} 的AI存储锁被占用，将消息添加到待处理队列")
+                    await self.ai_storage_lock_manager.add_pending_message(room_id, {
+                        "type": "ai_mention",
+                        "message_data": message_data,
+                        "user_id": user_id
+                    })
+            else:
+                # 检查是否有AI处理正在进行
+                is_locked = await self.ai_storage_lock_manager.is_storage_locked(room_id)
+                if is_locked:
+                    # AI处理正在进行，将普通消息添加到待处理队列
+                    logger.info(f"房间 {room_id} 的AI存储锁被占用，将普通消息添加到待处理队列")
+                    await self.ai_storage_lock_manager.add_pending_message(room_id, {
+                        "type": "normal",
+                        "message_data": message_data,
+                        "user_id": user_id
+                    })
+                else:
+                    # 普通消息直接处理
+                    logger.info("检测到普通消息，直接处理")
+                    await self._handle_normal_message(room_id, message_data, user_id)
+
+        except Exception as e:
+            logger.error(f"处理Redis队列消息失败: {str(e)}")
+
+
+    # 普通消息处理
+    async def _handle_normal_message(self, room_id: str, message_data: dict, user_id: str):
+        """处理普通消息"""
+        try:
+            logger.info(f"处理普通消息: {message_data}")
+            content = message_data.get("content")
+
+            # 获取用户信息
+            user_info = await self.redis_client.hgetall(f"user:{user_id}")
+            logger.info(f"获取到用户信息: {user_info}")
+            username = user_info.get("username", message_data.get("username", "Unknown"))
+
+            # 创建消息对象
+            message = {
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "username": username,  # 使用username而不是username
+                "content": content,
+                "timestamp": int(time.time() * 1000),  # 使用毫秒时间戳
             }
-            
-            # 广播到房间
+
+            logger.info(f"创建消息对象: {message}")
+
+            # 使用pipeline存储消息
+            pipe = await self.redis_client.pipeline()
+            pipe.lpush(f"room:{room_id}:messages", json.dumps(message))
+            pipe.expire(f"room:{room_id}:messages", 24 * 60 * 60)
+            logger.info("执行Redis pipeline")
+            await pipe.execute()
+
+            # 广播消息到房间
+            logger.info(f"广播消息到房间 {room_id}")
             await self.websocket_manager.broadcast_message(
                 room_id=room_id,
-                message=stream_message,
-                is_special=False  # AI流式响应不是特殊消息
+                message={
+                    "type": "chat",  # 明确指定消息类型
+                    "user_id": user_id,
+                    "username": username,  # 使用username而不是username
+                    "content": content,
+                    "timestamp": int(time.time() * 1000),
+                },
+                is_special=False  # 普通消息不是特殊消息
             )
+            logger.info("消息广播成功")
+
         except Exception as e:
-            logger.error(f"流式传输AI响应失败: {str(e)}")
+            logger.error(f"处理普通消息失败: {str(e)}")
+            # 尝试发送错误消息到前端
+            try:
+                await self.websocket_manager.broadcast_message(
+                    room_id=room_id,
+                    message={
+                        "type": "error",  # 明确指定错误消息类型
+                        "message": f"处理消息失败: {str(e)}",
+                        "timestamp": int(time.time() * 1000)
+                    },
+                    is_special=False  # 错误消息也不是特殊消息
+                )
+            except Exception as broadcast_error:
+                logger.error(f"发送错误消息失败: {str(broadcast_error)}")
 
-    async def _save_completed_ai_response(self, room_id: str, message_id: str, content: str, is_secret: bool = False) -> None:
-        """
-        保存完整的AI响应到Redis
 
-        Args:
-            room_id: 房间ID
-            message_id: 消息ID
-            content: 完整消息内容
-            is_secret: 是否是秘密频道消息
-        """
-        try:
-            # 创建AI消息对象
-            message = Message.create_user_message(
-                user_id="ai_assistant",
-                user_name="AI助手",
-                content=content
-            )
-            
-            # 根据消息类型选择存储方式
-            if is_secret:
-                await self.redis_client.add_secret_channel_message(room_id, message)
-            else:
-                await self.redis_client.add_room_message(room_id, message)
-                
-        except Exception as e:
-            logger.error(f"保存AI响应失败: {str(e)}")
-
+    # AI消息处理
     async def handle_ai_mention(self, room_id: str, message_data: Dict[str, Any], user_id: str) -> None:
         """处理AI提及的消息"""
         try:
@@ -207,7 +280,7 @@ class MessageService:
                 # 获取用户信息
                 user_info = await self.redis_client.hgetall(f"user:{user_id}")
                 logger.info(f"获取到用户信息: {user_info}")
-                username = user_info.get("username", message_data.get("user_name", "Unknown"))
+                username = user_info.get("username", message_data.get("username", "Unknown"))
                 
                 # 广播原始消息
                 await self.websocket_manager.broadcast_message(
@@ -215,7 +288,7 @@ class MessageService:
                     message={
                         "type": "chat",
                         "user_id": user_id,
-                        "user_name": username,
+                        "username": username,
                         "content": message_data.get("content", ""),
                         "timestamp": timestamp,
                         "is_system": False,
@@ -240,7 +313,7 @@ class MessageService:
                     message = Message(
                         timestamp=msg_dict.get("timestamp", int(time.time() * 1000)),
                         user_id=msg_dict.get("user_id", ""),
-                        user_name=msg_dict.get("username", "Unknown"),
+                        username=msg_dict.get("username", "Unknown"),
                         content=msg_dict.get("content", ""),
                         is_system=msg_dict.get("type") == "system"
                     )
@@ -255,6 +328,9 @@ class MessageService:
             # 设置是否是第一个块
             is_first_chunk = True
             
+            # 跟踪上一个块的末尾字符，用于识别跨块的连续换行
+            last_chunk_end = ""
+            
             # 调用LLM处理消息
             async for chunk in self.llm_service.chat_completion(
                 messages=chat_history,
@@ -263,9 +339,20 @@ class MessageService:
             ):
                 # 累积完整响应
                 full_ai_response += chunk
+
+                # 处理跨块边界的连续换行问题
+                check_str = last_chunk_end + chunk
+                processed_chunk = re.sub(r'\n{3,}', '\n\n', check_str)
                 
-                # 处理当前块，防止显示多余的空行
-                processed_chunk = re.sub(r'\n{3,}', '\n\n', chunk)
+                # 只发送不包含上一个块末尾的内容
+                if last_chunk_end and len(processed_chunk) > len(last_chunk_end):
+                    processed_chunk = processed_chunk[len(last_chunk_end):]
+                elif last_chunk_end:
+                    # 如果处理后的内容小于或等于上一块结尾，说明全是重复内容
+                    processed_chunk = ""
+                
+                # 更新末尾追踪（保存当前块的最后几个字符用于下次检查）
+                last_chunk_end = chunk[-3:] if len(chunk) >= 3 else chunk
                 
                 # 构造流式消息
                 chunk_timestamp = int(time.time() * 1000)
@@ -318,10 +405,9 @@ class MessageService:
             }
             pipe.lpush(f"room:{room_id}:messages", json.dumps(user_message))
             
-            # 2. 处理AI响应（去除多余的空行）并存储
-            # 将3个或更多连续换行符替换为2个
+            # 2. 处理AI响应（去除llm多余的空行）并存储
             processed_ai_response = re.sub(r'\n{3,}', '\n\n', full_ai_response)
-            
+
             ai_response_timestamp = int(time.time() * 1000)
             ai_message = {
                 "timestamp": ai_response_timestamp,
@@ -337,6 +423,9 @@ class MessageService:
             
             logger.info(f"AI会话 {session_id} 处理完成，已存储消息到Redis")
             
+            # 处理待处理消息队列
+            await self._process_pending_messages(room_id)
+            
         except Exception as e:
             logger.error(f"处理AI消息失败: {str(e)}")
             # 发送错误消息到前端
@@ -350,133 +439,107 @@ class MessageService:
                 is_special=False  # 错误消息不是特殊消息
             )
 
-    async def process_message(self, message_data: dict) -> dict:
-        """处理消息"""
-        try:
-            logger.info(f"开始处理消息: {message_data}")
-            
-            # 验证消息格式
-            validation = await self._validate_message_format(message_data)
-            if not validation["valid"]:
-                logger.error(f"消息格式验证失败: {validation['message']}")
-                return {"success": False, "message": validation["message"]}
+    async def _stream_ai_response_to_frontend(self, room_id: str, chunk: str, is_start: bool, is_end: bool) -> None:
+        """
+        将AI响应流式传输到前端
 
-            room_id = message_data.get("room_id")
-            user_id = message_data.get("user_id")
-            
-            if not room_id:
-                logger.error("消息缺少room_id字段")
-                return {"success": False, "message": "消息缺少room_id字段"}
-            
-            if not user_id:
-                logger.error("消息缺少user_id字段")
-                return {"success": False, "message": "消息缺少user_id字段"}
-            
-            logger.info(f"获取房间 {room_id} 的消息队列")
-            queue = await self._get_room_queue(room_id)
-            
-            logger.info(f"将消息放入队列: {message_data}")
-            await queue.put(message_data)
-            
-            logger.info("创建异步处理任务")
-            asyncio.create_task(self._process_queued_message(room_id, user_id))
-            
-            return {"success": True, "message": "Message queued successfully"}
-        except Exception as e:
-            logger.error(f"处理消息失败: {str(e)}")
-            return {"success": False, "message": f"Failed to process message: {str(e)}"}
-            
-    async def _process_queued_message(self, room_id: str, user_id: str):
-        """处理消息队列中的消息"""
+        Args:
+            room_id: 房间ID
+            chunk: 消息内容片段
+            is_start: 是否是开始
+            is_end: 是否是结束
+        """
         try:
-            logger.info(f"开始处理房间 {room_id} 队列中的消息")
-            queue = await self._get_room_queue(room_id)
-            message_data = await queue.get()
-            logger.info(f"从队列获取消息: {message_data}")
+            # 预处理消息块，去除多余空行
+            chunk = re.sub(r'\n{3,}', '\n\n', chunk)
             
-            # 检查是否是AI消息
-            contains_ai_mention = False
-            if "mentions" in message_data:
-                logger.info(f"检查mentions字段: {message_data['mentions']}")
-                # 检查mentions数组中是否有ai_assistant
-                contains_ai_mention = any(mention.get('id') == 'ai_assistant' for mention in message_data["mentions"])
-            
-            if contains_ai_mention or message_data.get('ai_type'):
-                logger.info("检测到AI提及，准备获取AI锁")
-                # 获取AI锁
-                ai_lock = await self._get_room_ai_lock(room_id)
-                logger.info("获取AI锁成功，准备处理AI提及消息")
-                async with ai_lock:
-                    await self.handle_ai_mention(room_id, message_data, user_id)
-            else:
-                # 普通消息直接处理
-                logger.info("检测到普通消息，直接处理")
-                await self._handle_normal_message(room_id, message_data, user_id)
-                
-        except Exception as e:
-            logger.error(f"处理队列消息失败: {str(e)}")
-            
-    async def _handle_normal_message(self, room_id: str, message_data: dict, user_id: str):
-        """处理普通消息"""
-        try:
-            logger.info(f"处理普通消息: {message_data}")
-            content = message_data.get("content")
-            
-            # 获取用户信息
-            user_info = await self.redis_client.hgetall(f"user:{user_id}")
-            logger.info(f"获取到用户信息: {user_info}")
-            username = user_info.get("username", message_data.get("user_name", "Unknown"))
-            
-            # 创建消息对象
-            message = {
-                "id": str(uuid.uuid4()),
-                "user_id": user_id,
-                "user_name": username,  # 使用user_name而不是username
-                "content": content,
-                "timestamp": int(time.time() * 1000),  # 使用毫秒时间戳
+            # 生成时间戳作为唯一ID
+            timestamp = int(time.time() * 1000)
 
+            # 构造流式消息格式 - 确保只有一个消息会话从开始到结束
+            stream_message = {
+                "timestamp": timestamp,
+                "type": "ai_stream",    #   标识当前是什么情况的AI返回(ai_stream, secret_channel, game_chat)
+                "is_start": is_start,
+                "is_end": is_end,
+                "content": chunk,
+                "session_id": f"ai_session_{room_id}_{timestamp}" if is_start else None  # 仅在开始时创建会话ID
             }
 
-            logger.info(f"创建消息对象: {message}")
-
-            # 使用pipeline存储消息
-            pipe = await self.redis_client.pipeline()
-            pipe.lpush(f"room:{room_id}:messages", json.dumps(message))
-            pipe.expire(f"room:{room_id}:messages", 24 * 60 * 60)
-            logger.info("执行Redis pipeline")
-            await pipe.execute()
-
-            # 广播消息到房间
-            logger.info(f"广播消息到房间 {room_id}")
+            # 广播到房间
             await self.websocket_manager.broadcast_message(
                 room_id=room_id,
-                message={
-                    "type": "chat",  # 明确指定消息类型
-                    "user_id": user_id,
-                    "user_name": username,  # 使用user_name而不是username
-                    "content": content,
-                    "timestamp": int(time.time() * 1000),
-                },
-                is_special=False  # 普通消息不是特殊消息
+                message=stream_message,
+                is_special=False  # AI流式响应不是特殊消息
             )
-            logger.info("消息广播成功")
+        except Exception as e:
+            logger.error(f"流式传输AI响应失败: {str(e)}")
+
+    async def _save_completed_ai_response(self, room_id: str, message_id: str, content: str, is_secret: bool = False) -> None:
+        """
+        保存完整的AI响应到Redis
+
+        Args:
+            room_id: 房间ID
+            message_id: 消息ID
+            content: 完整消息内容
+            is_secret: 是否是秘密频道消息
+        """
+        try:
+            # 创建AI消息对象
+            message = Message.create_user_message(
+                user_id="ai_assistant",
+                username="AI助手",
+                content=content
+            )
+
+            # 根据消息类型选择存储方式
+            if is_secret:
+                await self.redis_client.add_secret_channel_message(room_id, message)
+            else:
+                await self.redis_client.add_room_message(room_id, message)
+                
+        except Exception as e:
+            logger.error(f"保存AI响应失败: {str(e)}")
+
+
+    # 待处理消息队列部分
+    async def _process_pending_messages(self, room_id: str):
+        """处理待处理消息队列中的消息"""
+        try:
+            logger.info(f"开始处理房间 {room_id} 的待处理消息")
+
+            # 处理所有待处理消息
+            await self.ai_storage_lock_manager.process_pending_messages(room_id, self._process_single_pending_message)
+
+        except Exception as e:
+            logger.error(f"处理待处理消息失败: {str(e)}")
+
+    async def _process_single_pending_message(self, message: dict):
+        """处理单条待处理消息"""
+        try:
+            message_type = message.get("type")
+            message_data = message.get("message_data")
+            user_id = message.get("user_id")
+            room_id = message_data.get("room_id")
+
+            if not message_type or not message_data or not user_id or not room_id:
+                logger.error(f"无效的待处理消息格式: {message}")
+                return
+
+            if message_type == "normal":
+                # 处理普通消息
+                await self._handle_normal_message(room_id, message_data, user_id)
+
+            if message_type == "ai_mention":
+                logger.info(f"重新将AI消息添加到Redis队列: {message_data}")
+                await self.message_queue_manager.add_message(room_id, message_data)
             
         except Exception as e:
-            logger.error(f"处理普通消息失败: {str(e)}")
-            # 尝试发送错误消息到前端
-            try:
-                await self.websocket_manager.broadcast_message(
-                    room_id=room_id,
-                    message={
-                        "type": "error",  # 明确指定错误消息类型
-                        "message": f"处理消息失败: {str(e)}",
-                        "timestamp": int(time.time() * 1000)
-                    },
-                    is_special=False  # 错误消息也不是特殊消息
-                )
-            except Exception as broadcast_error:
-                logger.error(f"发送错误消息失败: {str(broadcast_error)}")
+            logger.error(f"处理单条待处理消息失败: {str(e)}")
 
+
+    # 特殊消息处理
     async def process_secret_message(self, room_id: str, message_data: Dict[str, Any], user_id: str) -> Dict[str, Any]:
         """
         处理秘密频道消息
@@ -543,12 +606,12 @@ class MessageService:
                 target_users.append(user_id)
                 
             # 创建消息对象
-            user_name = user_data.get("username", "未知用户")
+            username = user_data.get("username", "未知用户")
             content = message_data.get("content", "")
             
             message = Message.create_user_message(
                 user_id=user_id,
-                user_name=user_name,
+                username=username,
                 content=content
             )
             
@@ -638,6 +701,8 @@ class MessageService:
                 "message": f"系统消息发送失败: {str(e)}"
             }
             
+
+    # 消息存储+获取
     async def get_room_messages(self, room_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         """获取房间消息历史"""
         try:
@@ -716,4 +781,3 @@ class MessageService:
                 "success": False,
                 "message": f"获取秘密频道消息失败: {str(e)}"
             }
-
