@@ -65,13 +65,18 @@ class TokenRefresh(BaseModel):
 # 初始化FastAPI应用
 app = FastAPI(title="SpyAmongUs API", debug=DEBUG)
 
-# CORS设置
+origins = [
+    "http://localhost:5173",  # 前端开发服务器
+    # 如果部署后前端地址不同，也需要添加
+    # 例如: "http://your-frontend-domain.com"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],    # 测试环境不限制，生产环境需修改
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # 允许所有方法
+    allow_headers=["*"],  # 允许所有头部
 )
 
 # 初始化服务
@@ -334,14 +339,27 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         await websocket_manager.add_connection(room_id, user_id, websocket)
         logger.info(f"用户 {user_id} 已添加到房间 {room_id} 的WebSocket连接管理器")
 
-        # 4.发送连接成功消息
+        # --- 获取房间信息并确定上下文 ---
+        room_info = await room_service.get_room_basic_data(room_id)
+        context = "join"
+        room_name = "未知房间"
+        if room_info and room_info.get("host_id") == user_id:
+            context = "create"
+        if room_info and room_info.get("room_name"):
+            room_name = room_info["room_name"]
+        logger.info(f"用户 {user_id} 连接房间 {room_id} 的上下文: {context}, 房间名: {room_name}")
+        # ---------------------------------
+
+        # 4.发送连接成功消息 (添加 context 和 room_name)
         await websocket.send_json({
             "type": "system",
             "event": "connected",
             "room_id": room_id,
+            "context": context, # 添加上下文
+            "room_name": room_name, # 添加房间名
             "timestamp": int(time.time() * 1000)
         })
-        logger.info(f"已向用户 {user_id} 发送WebSocket连接成功消息")
+        logger.info(f"已向用户 {user_id} 发送WebSocket连接成功消息 (含上下文)")
 
         # 5.监听消息
         while True:

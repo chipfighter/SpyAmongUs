@@ -596,6 +596,20 @@ class RoomService:
                 "message": f"获取公开房间列表失败: {str(e)}"
             }
             
+    async def get_room_basic_data(self, invite_code: str) -> Optional[Dict[str, Any]]:
+        """获取房间的基础信息 (不包含用户列表)"""
+        try:
+            # 直接调用 Redis 工具类的方法
+            room_data = await self.redis_client.get_room_basic_data(invite_code)
+            if not room_data:
+                logger.warning(f"无法从 Redis 获取房间 {invite_code} 的基础数据")
+                return None
+
+            return room_data
+        except Exception as e:
+            logger.error(f"获取房间 {invite_code} 基础数据时出错: {str(e)}")
+            return None
+
     async def get_room_details(self, invite_code: str) -> Dict[str, Any]:
         """
         获取指定房间的详细信息

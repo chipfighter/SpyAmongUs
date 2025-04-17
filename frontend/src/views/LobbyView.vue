@@ -1,5 +1,12 @@
 <template>
   <div class="lobby-container" @click.self="closeContextMenuAndDialogs">
+    <!-- WebSocket 连接加载指示器 -->
+    <div v-if="isConnectingWebSocket" class="websocket-loading-overlay">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">正在连接房间...</div>
+    </div>
+    <!-- 结束加载指示器 -->
+
     <!-- 顶部导航栏 -->
     <header class="header">
       <div class="action-buttons">
@@ -223,13 +230,15 @@
 </template>
 
 <script setup>
-import { onMounted, ref, onBeforeUnmount, nextTick } from 'vue'
+import { onMounted, ref, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from '../stores/userStore'
+import { useWebsocketStore } from '../stores/websocket'
 
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
+const websocketStore = useWebsocketStore()
 
 // 创建房间相关
 const showCreateRoomDialog = ref(false)
@@ -269,6 +278,11 @@ const dragOffset = ref({ x: 0, y: 0 })
 const contextMenuVisible = ref(false)
 const contextMenuPosition = ref({ top: 0, left: 0 })
 const contextMenuRoom = ref(null)
+
+// --- Add loading state for WebSocket --- 
+const isConnectingWebSocket = ref(false)
+const webSocketConnectionError = ref(null) // Store WebSocket connection error
+// ------------------------------------
 
 onMounted(async () => {
   // 初始化用户数据
@@ -410,101 +424,94 @@ const validateAndCreateRoom = async () => {
 }
 
 async function createRoom() {
+  formError.value = ''
+  // --- Show initial loading for API call (optional, could be part of WebSocket loading) ---
+  // isLoading.value = true; 
+  
   try {
-    formError.value = ''
-    isLoading.value = true
-    
-    // 调用创建房间API
     const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/create_room`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+        'Authorization': `Bearer ${userStore.accessToken}`
       },
       body: JSON.stringify(roomData.value)
     })
-    
     const result = await response.json()
     
-    if (result.success) {
-      console.log('房间创建成功:', result)
-      // 关闭对话框
+    // isLoading.value = false; // Hide initial loading
+    
+    if (result.success && result.data?.invite_code) {
       showCreateRoomDialog.value = false
-      
-      // 获取房间数据
-      const inviteCode = result.data.invite_code
-      
-      // 将完整的返回结果暂存在localStorage中
-      localStorage.setItem('tempRoomData', JSON.stringify(result))
-      
-      // 跳转到房间页面
-      router.push(`/room/${inviteCode}`)
+      const roomId = result.data.invite_code;
+      console.log(`Room created successfully with ID: ${roomId}. Connecting WebSocket...`);
+      // --- Call the helper function --- 
+      await connectAndNavigate(roomId);
+      // --- Remove direct navigation --- 
+      // router.push(`/room/${roomId}`)
     } else {
-      // 显示错误信息
       formError.value = result.message || '创建房间失败'
+      console.error('创建房间失败:', result)
     }
   } catch (error) {
-    console.error('创建房间出错:', error)
-    formError.value = '创建房间时出错，请稍后再试'
-  } finally {
-    isLoading.value = false
+    // isLoading.value = false; // Hide initial loading on error
+    formError.value = '创建房间时发生错误，请重试'
+    console.error('创建房间错误:', error)
   }
 }
 
 // 处理弹窗加入
-const handleJoinFromDialog = () => {
-  joinFormError.value = ''
-  const code = inviteCodeInput.value.trim()
-  if (!code) {
+const handleJoinFromDialog = async () => {
+  if (!inviteCodeInput.value.trim()) {
     joinFormError.value = '请输入邀请码'
     return
   }
-  // 调用已有的加入房间函数
-  joinRoom(code)
-  // 如果加入成功，joinRoom 内部会跳转，如果失败，错误信息会通过 alert 显示
-  // 如果 API 调用没有抛出错误但返回失败 (e.g., 房间满员)，我们可能需要检查结果并更新 joinFormError
-  // 这里暂时依赖 joinRoom 内部的 alert
-  // 如果加入成功，可以考虑关闭弹窗，尽管页面跳转会使其消失
-  // if (!joinFormError.value) { // 假设 joinRoom 会设置错误状态或抛出异常
-  //   showJoinRoomDialog.value = false;
-  // }
-  
-  // 简单处理：无论成功与否（跳转前），清空输入框
-  // inviteCodeInput.value = '' 
-  // 考虑到用户可能输错，不清空，方便修改
+  await joinRoom(inviteCodeInput.value.trim())
 }
 
 // 加入房间核心逻辑
-const joinRoom = async (inviteCode) => {
+const joinRoom = async (roomId) => {
+  joinFormError.value = ''
+  // --- Show initial loading for API call (optional) ---
+  // isLoading.value = true; 
+
   try {
-    isLoading.value = true
-    
-    // 调用加入房间API
-    const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/${inviteCode}/join_room`, {
+    const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/${roomId}/join_room`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+        'Authorization': `Bearer ${userStore.accessToken}`
       }
     })
-    
     const result = await response.json()
     
+    // isLoading.value = false; // Hide initial loading
+    
     if (result.success) {
-      // 保存完整的返回结果
-      localStorage.setItem('tempRoomData', JSON.stringify(result))
-      
-      // 加入成功，跳转到房间
-      router.push(`/room/${inviteCode}`)
+      showJoinRoomDialog.value = false
+      inviteCodeInput.value = ''
+      console.log(`Joined room successfully: ${roomId}. Connecting WebSocket...`);
+      // --- Call the helper function --- 
+      await connectAndNavigate(roomId);
+      // --- Remove direct navigation --- 
+      // router.push(`/room/${roomId}`)
     } else {
-      // 显示加入失败提示
-      alert(result.message || '加入房间失败')
+      if (showJoinRoomDialog.value) {
+         joinFormError.value = result.message || '加入房间失败'
+      } else {
+         // Handle error if join initiated from context menu (e.g., global notification)
+         alert(`加入房间失败: ${result.message || '请重试'}`);
+      }
+      console.error('加入房间失败:', result)
     }
   } catch (error) {
-    console.error('加入房间出错:', error)
-    alert('加入房间时出错，请稍后再试')
-  } finally {
-    isLoading.value = false
+    // isLoading.value = false; // Hide initial loading on error
+    if (showJoinRoomDialog.value) {
+       joinFormError.value = '加入房间时发生错误，请重试'
+    } else {
+       alert('加入房间时发生错误，请重试');
+    }
+    console.error('加入房间错误:', error)
   }
 }
 
@@ -718,18 +725,12 @@ function handleClickOutsideMenu(event) {
 }
 
 // 处理右键菜单加入
-const handleJoinFromMenu = () => {
-  if (contextMenuRoom.value) {
-    // --- 新增：在这里也加入检查 --- 
-    if (userStore.user?.current_room) {
-      alert('您已在一个房间中，请先退出或返回房间后再加入。');
-      closeContextMenuAndDialogs(); // 关闭菜单
-      return; // 阻止后续加入操作
-    }
-    joinRoom(contextMenuRoom.value.invite_code);
+const handleJoinFromMenu = async () => {
+  if (contextMenuRoom.value?.invite_code) {
+    contextMenuVisible.value = false
+    await joinRoom(contextMenuRoom.value.invite_code)
   }
-  closeContextMenuAndDialogs();
-};
+}
 
 // 新增：处理头像加载失败
 function onAvatarError(event) {
@@ -745,9 +746,112 @@ function closeContextMenuAndDialogs() {
 }
 
 // --- 结束：上下文菜单逻辑 ---
+
+// --- Helper function to handle WebSocket connection and navigation --- 
+const connectAndNavigate = async (roomId) => {
+  if (!roomId) {
+    console.error('connectAndNavigate failed: roomId is missing');
+    return; 
+  }
+  
+  isConnectingWebSocket.value = true;
+  webSocketConnectionError.value = null; // Reset previous error
+  
+  const token = userStore.accessToken; // Get current token
+  if (!token) {
+     console.error('WebSocket connection failed: Missing token');
+     webSocketConnectionError.value = '登录信息丢失，无法连接房间';
+     isConnectingWebSocket.value = false;
+     return;
+  }
+  
+  // Start connection
+  websocketStore.connect(roomId, token);
+  
+  // Watch for connection status changes
+  const stopWatch = watch(() => websocketStore.connectionStatus, (newStatus, oldStatus) => {
+    console.log(`[LobbyView Watcher] WebSocket status changed: ${oldStatus} -> ${newStatus}`);
+    if (newStatus === 'connected') {
+      console.log('[LobbyView Watcher] WebSocket connected! Navigating...');
+      isConnectingWebSocket.value = false;
+      stopWatch(); // Stop watching once connected
+      router.push(`/room/${roomId}`);
+    } else if (newStatus === 'disconnected' && oldStatus === 'connecting') {
+      // Connection failed during the attempt
+      console.error('[LobbyView Watcher] WebSocket connection failed during attempt.');
+      isConnectingWebSocket.value = false;
+      webSocketConnectionError.value = '无法连接到房间服务器，请稍后重试或检查网络。'; 
+      stopWatch(); // Stop watching on failure
+      // Optionally disconnect if needed, though handleClose should manage state
+      // websocketStore.disconnect(); 
+    }
+    // We might need to handle cases where it disconnects *after* being connected briefly
+    // but that might be better handled globally or in RoomView.
+  }, { immediate: false }); // Don't run immediately
+
+  // Timeout for the watcher itself, in case connection hangs indefinitely
+  setTimeout(() => {
+      if (isConnectingWebSocket.value) { // Still waiting?
+          console.error('[LobbyView Watcher] Timeout waiting for WebSocket connection.');
+          stopWatch();
+          isConnectingWebSocket.value = false;
+          webSocketConnectionError.value = '连接房间超时，请重试。';
+          websocketStore.disconnect(true); // Force disconnect state
+      }
+  }, 15000); // 15 second timeout for connection attempt
+};
+// --------------------------------------------------------------------
+
+// --- Add watcher for WebSocket errors to potentially show in Lobby --- 
+watch(webSocketConnectionError, (newError) => {
+  if (newError) {
+      // Show error to the user (e.g., using a toast notification or a dedicated error area)
+      // For now, just use alert
+      alert(`连接错误: ${newError}`); 
+      // Optionally clear the error after showing it
+      // setTimeout(() => { webSocketConnectionError.value = null; }, 5000);
+  }
+});
 </script>
 
 <style scoped>
+/* --- Add styles for WebSocket loading overlay --- */
+.websocket-loading-overlay {
+  position: fixed; /* Or absolute if lobby-container is relative */
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(255, 255, 255, 0.7); /* Semi-transparent white */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 2000; /* Ensure it's above other elements */
+}
+
+/* Reuse existing spinner styles if available, or define new ones */
+.loading-spinner { 
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border: 5px solid #f3f3f3;
+  border-top: 5px solid #1890ff; /* Adjust color if needed */
+  animation: spin 1s linear infinite;
+  margin-bottom: 20px;
+}
+
+.loading-text {
+  font-size: 18px;
+  color: #333;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+/* --- End WebSocket loading styles --- */
+
 .lobby-container {
   min-height: 100vh;
   background-color: #f5f7fa;
