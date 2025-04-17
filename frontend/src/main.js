@@ -4,6 +4,7 @@ import axios from 'axios'
 import App from './App.vue'
 import router from './router'
 import { API_URL } from '@/config'
+import { useUserStore } from './stores/userStore'
 
 // --------------------------------------------------
 // 全局错误处理工具
@@ -117,10 +118,7 @@ axios.interceptors.request.use(config => {
   return Promise.reject(error);
 })
 
-// --------------------------------------------------
 // 响应拦截器：处理认证错误
-// --------------------------------------------------
-
 axios.interceptors.response.use(
   response => {
     console.log(`请求成功: ${response.config.url} (${response.status})`)
@@ -168,5 +166,11 @@ const app = createApp(App)
 app.config.globalProperties.$errorHandler = errorHandler
 
 app.use(pinia)
+
+// --- Initialize user store after Pinia is used ---
+const userStore = useUserStore()
+userStore.initStore()
+// ------------------------------------------------
+
 app.use(router)
 app.mount('#app')
