@@ -316,22 +316,24 @@ class UserService:
             }
 
     async def update_avatar(self, user_id: str, avatar_url: str) -> Dict[str, Any]:
-        """更新用户头像"""
+        """更新用户头像，需要同时更新MongoDB和Redis"""
         try:
-            # 更新MongoDB中的头像
-            success, message = await self.mongo_client.update_avatar(user_id, avatar_url)
-            if not success:
+            # 更新MongoDB
+            success_mongo = await self.mongo_client.update_user(user_id, {"avatar_url": avatar_url})
+            if not success_mongo:
                 return {
                     "success": False,
-                    "message": message
+                    "message": "更新数据库失败"
                 }
-
+            
             # 更新Redis缓存
-            await self.redis_client.update_avatar(user_id, avatar_url)
-
+            success_redis = await self.redis_client.update_user_cache_field(user_id, "avatar_url", avatar_url)
+            if not success_redis:
+                logger.warning(f"更新用户 {user_id} 的头像Redis缓存失败，但不影响主要流程")
+            
             return {
                 "success": True,
-                "message": "头像已更新"
+                "message": "头像更新成功"
             }
         except Exception as e:
             logger.error(f"更新用户头像失败: {str(e)}")
@@ -341,65 +343,111 @@ class UserService:
             }
 
     async def get_user_info(self, user_id: str) -> Dict[str, Any]:
-        """获取用户信息"""
+        """获取用户常用的基础信息（仅从Redis获取，速度快）"""
         try:
-            # 先从Redis缓存中获取
+            # 直接从Redis缓存中获取
             user_data = await self.redis_client.get_user(user_id)
             if user_data:
-                # 读取出来先重构成对象类型
-                # 1. 创建合适的statistics对象
-                user_data["statistics"] = UserStatistics(
-                    total_games=int(user_data.get("total_games", 0)),
-                    win_rates={
-                        "civilian": float(user_data.get("win_rate_civilian", 0.0)),
-                        "spy": float(user_data.get("win_rate_spy", 0.0))
-                    }
-                ).dict()
+                # 提取常用字段
+                info = {
+                    "id": user_id, # ID本身就是传入的
+                    "username": user_data.get("username"),
+                    "avatar_url": user_data.get("avatar_url"),
+                    "status": user_data.get("status", USER_STATUS_ONLINE), # 提供默认值
+                    "current_room": user_data.get("current_room") # 可能为None
+                }
+                return {
+                    "success": True,
+                    "message": "获取成功",
+                    "data": info
+                }
+            else:
+                # Redis中没有缓存，可能用户已登出或从未登录
+                # 不再回退到 MongoDB，保持此函数的高速特性
+                return {
+                    "success": False,
+                    "message": "用户未在线或信息未缓存"
+                }
 
-                # 2. 创建合适的style_profile对象
-                tags = set()
-                if user_data.get("tags"):
-                    try:
-                        tags = set(user_data.get("tags").split(","))
-                    except:
-                        pass
+        except Exception as e:
+            logger.error(f"从Redis获取用户信息失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"获取用户信息时出错: {str(e)}"
+            }
 
-                user_data["style_profile"] = StyleProfile(
-                    summary=user_data.get("summary", ""),
-                    tags=tags,
-                    vectors={}
-                ).dict()
-
-                # 3. 移除扁平化字段避免冲突
-                for key in ["total_games", "win_rate_civilian", "win_rate_spy", "summary", "tags"]:
-                    if key in user_data:
-                        user_data.pop(key)
-
-                # 如果缓存中没有，从MongoDB获取
-                user_data = await self.mongo_client.find_user(user_id)
-                if not user_data:
-                    return {
-                        "success": False,
-                        "message": "用户不存在"
-                    }
+    async def get_user_stats(self, user_id: str) -> Dict[str, Any]:
+        """获取用户的统计数据（从MongoDB获取）"""
+        try:
+            # 从MongoDB获取完整的用户信息
+            user_data = await self.mongo_client.find_user(user_id)
+            if not user_data:
+                return {
+                    "success": False,
+                    "message": "用户不存在"
+                }
+            
+            # 提取或创建默认的统计数据
+            stats_data = user_data.get("statistics")
+            if stats_data and isinstance(stats_data, dict):
+                # 使用 Pydantic 模型验证和转换
+                stats_obj = UserStatistics(**stats_data)
+            else:
+                # 如果没有统计数据，返回默认值
+                stats_obj = UserStatistics() 
                 
-                # MongoDB中没有状态字段，设置默认状态
-                user_data["status"] = USER_STATUS_ONLINE
-                    
-                # 更新缓存
-                await self.redis_client.cache_user(user_id, user_data)
-
-            # 返回用户数据（调用user.dict()去除敏感信息）
-            user = User(**user_data)
             return {
                 "success": True,
-                "message": "获取成功",
-                "data": user.dict()
+                "message": "获取统计数据成功",
+                "data": stats_obj.dict()
             }
 
         except Exception as e:
-            logger.error(f"获取用户信息失败: {str(e)}")
+            logger.error(f"获取用户统计数据失败: {str(e)}")
             return {
                 "success": False,
-                "message": f"获取失败: {str(e)}"
+                "message": f"获取统计数据时出错: {str(e)}"
+            }
+
+    async def get_user_style_profile(self, user_id: str) -> Dict[str, Any]:
+        """获取用户的画像数据（从MongoDB获取）"""
+        try:
+            # 从MongoDB获取完整的用户信息
+            user_data = await self.mongo_client.find_user(user_id)
+            if not user_data:
+                return {
+                    "success": False,
+                    "message": "用户不存在"
+                }
+                
+            # 提取或创建默认的画像数据
+            profile_data = user_data.get("style_profile")
+            if profile_data and isinstance(profile_data, dict):
+                # 处理 tags 从 list (MongoDB存储) 到 set (Pydantic模型)
+                if "tags" in profile_data and isinstance(profile_data["tags"], list):
+                    profile_data["tags"] = set(profile_data["tags"])
+                elif "tags" not in profile_data:
+                     profile_data["tags"] = set()
+                
+                # 确保 vectors 存在
+                if "vectors" not in profile_data:
+                    profile_data["vectors"] = {}
+                    
+                # 使用 Pydantic 模型验证和转换
+                profile_obj = StyleProfile(**profile_data)
+            else:
+                # 如果没有画像数据，返回默认值
+                profile_obj = StyleProfile()
+                
+            return {
+                "success": True,
+                "message": "获取用户画像成功",
+                "data": profile_obj.dict()
+            }
+
+        except Exception as e:
+            logger.error(f"获取用户画像数据失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"获取用户画像时出错: {str(e)}"
             }

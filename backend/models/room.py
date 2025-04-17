@@ -4,7 +4,7 @@ model: Room
 import time
 
 from pydantic import BaseModel, Field
-from typing import Dict, Set, Optional, List, Any, Union
+from typing import Dict, Optional, Any
 import random
 import string
 from config import (
@@ -12,17 +12,21 @@ from config import (
     MIN_PLAYERS, MIN_SPY_COUNT,
     MAX_ROUNDS, MAX_SPEAK_TIME, MAX_LAST_WORDS_TIME
 )
-from models.message import Message
 
 
 class Room(BaseModel):
+    """
+    房间核心模型
+    
+    仅保留基础房间信息和游戏配置，其他数据（用户列表、消息、投票等）
+    通过invite_code在Redis中单独存储
+    """
     # 基本房间信息（创建时必须的）
     invite_code: str
     room_name: str
     host_id: str
     is_public: bool = True
-    users: Set[str] = Field(default_factory=set)
-
+    
     # 游戏配置（创建时设置）
     total_players: int = MIN_PLAYERS
     spy_count: int = MIN_SPY_COUNT
@@ -41,21 +45,8 @@ class Room(BaseModel):
     word_civilian: Optional[str] = None
     word_spy: Optional[str] = None
 
-    # 用户相关（游戏开始时初始化）
-    ready_users: Set[str] = Field(default_factory=set)
-    alive_players: Optional[Set[str]] = None
-    roles: Optional[Dict[str, str]] = None
-
-    # 投票历史（游戏开始时初始化）
-    votes: Optional[Dict[str, Dict[str, Any]]] = None
-
     # 秘密聊天室（游戏开始时初始化）
     secret_chat_active: bool = False
-    secret_chat_votes: Optional[Dict[str, bool]] = None
-
-    # 消息相关（游戏开始时初始化）
-    messages: List[Message] = Field(default_factory=list)
-    secret_chat_messages: Optional[List[Message]] = None
 
     # 时间相关
     created_at: int = int(time.time() * 1000)
@@ -65,17 +56,11 @@ class Room(BaseModel):
         """将Python对象转化为适合Redis存储的格式"""
         room_dict = super().dict(**kwargs)
 
-        # 将集合字段转换为列表
-        set_fields = ["users", "ready_users", "alive_players"]
-        for field in set_fields:
-            if field in room_dict and isinstance(room_dict[field], set):
-                room_dict[field] = list(room_dict[field])
-
         # 确保布尔值是字符串
         bool_fields = ["is_public", "llm_free", "secret_chat_active"]
         for field in bool_fields:
             if field in room_dict:
-                room_dict[field] = str(room_dict[field]).lower()
+                room_dict[field] = str(room_dict[field]).lower()    # bool类型全部转变为小写字符串！
 
         # 处理空值
         for key, value in room_dict.items():

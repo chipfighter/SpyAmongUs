@@ -1,12 +1,12 @@
 <template>
-  <div class="lobby-container">
+  <div class="lobby-container" @click.self="closeContextMenuAndDialogs">
     <!-- 顶部导航栏 -->
     <header class="header">
       <div class="action-buttons">
-        <button class="create-room-btn" @click="showCreateRoomDialog = true">
+        <button class="create-room-btn" @click="openCreateRoomDialog">
           <i class="icon">+</i> 创建房间
         </button>
-        <button class="join-room-btn">
+        <button class="join-room-btn" @click="openJoinRoomDialog">
           <i class="icon">→</i> 加入房间
         </button>
       </div>
@@ -33,27 +33,43 @@
         </button>
       </div>
       
+      <!-- 加载状态 -->
+      <div v-if="isLoading" class="loading-state">正在加载房间...</div>
+
       <!-- 空状态 -->
-      <div class="empty-state" v-if="publicRooms.length === 0">
+      <div class="empty-state" v-if="!isLoading && publicRooms.length === 0">
         <div class="empty-icon">🏠</div>
         <h3>暂无公开房间</h3>
         <p>点击顶部按钮创建或加入房间</p>
       </div>
       
-      <!-- 房间列表 - 当有房间时会显示 -->
-      <div class="room-list" v-if="publicRooms.length > 0">
-        <div class="room-card" v-for="room in publicRooms" :key="room.invite_code">
-          <div class="room-header">
+      <!-- 房间列表 - 更新结构和样式 -->
+      <div class="room-list" v-if="!isLoading && publicRooms.length > 0">
+        <div 
+          class="room-card" 
+          v-for="room in publicRooms" 
+          :key="room.invite_code"
+          @click.stop="showContextMenu($event, room)" 
+          @contextmenu.prevent="showContextMenu($event, room)"
+        >
+          <img 
+            :src="room.host_avatar_url || '/default_avatar.jpg'" 
+            alt="房主头像" 
+            class="host-avatar"
+            @error="onAvatarError"
+          />
+          
+          <div class="room-card-content">
             <h3 class="room-name">{{ room.room_name }}</h3>
-            <span class="room-status">{{ room.status === 'waiting' ? '等待中' : '游戏中' }}</span>
+            <div class="room-details">
+              <span class="room-players">
+                <i class="fas fa-users"></i> {{ room.current_players }}/{{ room.total_players }}
+              </span>
+              <span class="room-status" :class="room.status">
+                {{ room.status === 'waiting' ? '等待中' : '游戏中' }}
+              </span>
+            </div>
           </div>
-          <div class="room-info">
-            <div class="room-host">房主: {{ room.host_name }}</div>
-            <div class="room-players">{{ room.current_players }}/{{ room.total_players }} 人</div>
-          </div>
-          <button class="join-room-card-btn" @click="joinRoom(room.invite_code)" :disabled="room.status !== 'waiting'">
-            {{ room.status === 'waiting' ? '加入房间' : '游戏中' }}
-          </button>
         </div>
       </div>
     </main>
@@ -136,6 +152,38 @@
       </div>
     </div>
 
+    <!-- 新增：加入房间弹窗 -->
+    <div class="dialog-overlay" v-if="showJoinRoomDialog" @click.self="showJoinRoomDialog = false">
+      <div class="join-room-dialog">
+        <div class="dialog-header">
+          <h2>加入房间</h2>
+          <button class="close-btn" @click="showJoinRoomDialog = false">×</button>
+        </div>
+        <div class="dialog-body">
+          <div class="error-message" v-if="joinFormError">
+            {{ joinFormError }}
+          </div>
+          <div class="form-group">
+            <label for="invite-code-input">房间邀请码</label>
+            <input 
+              id="invite-code-input"
+              v-model="inviteCodeInput" 
+              type="text" 
+              placeholder="输入房间的邀请码"
+              class="input-control"
+              @keyup.enter="handleJoinFromDialog"
+            >
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button class="cancel-btn" @click="showJoinRoomDialog = false">取消</button>
+          <button class="create-btn" @click="handleJoinFromDialog">
+            <i class="icon">→</i> 确认加入
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- 悬浮球（从房间返回时显示） -->
     <div v-if="showFloatingBall && activeRoom" class="floating-ball" :style="floatingBallPosition" @mousedown="startDragBall">
       <div class="ball-content">
@@ -156,11 +204,26 @@
         </div>
       </div>
     </div>
+
+    <!-- 新增：上下文菜单 -->
+    <div 
+      v-if="contextMenuVisible" 
+      class="context-menu" 
+      :style="{ top: contextMenuPosition.top + 'px', left: contextMenuPosition.left + 'px' }"
+      @click.stop
+    >
+      <div class="context-menu-item" @click="handleJoinFromMenu">
+        <i class="fas fa-sign-in-alt"></i> 加入房间
+      </div>
+      <div class="context-menu-item disabled">
+        <i class="fas fa-info-circle"></i> 房间详情 (暂不可用)
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref, onBeforeUnmount } from 'vue'
+import { onMounted, ref, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from '../stores/userStore'
 
@@ -182,9 +245,14 @@ const roomData = ref({
   llm_free: false
 })
 
+// 新增：加入房间弹窗相关
+const showJoinRoomDialog = ref(false)
+const inviteCodeInput = ref('')
+const joinFormError = ref('')
+
 // 房间列表相关
 const publicRooms = ref([])
-const isLoading = ref(false)
+const isLoading = ref(true)
 
 // 悬浮球相关
 const showFloatingBall = ref(false)
@@ -197,7 +265,12 @@ const floatingBallPosition = ref({
 const isDragging = ref(false)
 const dragOffset = ref({ x: 0, y: 0 })
 
-onMounted(() => {
+// 新增：上下文菜单状态
+const contextMenuVisible = ref(false)
+const contextMenuPosition = ref({ top: 0, left: 0 })
+const contextMenuRoom = ref(null)
+
+onMounted(async () => {
   // 初始化用户数据
   userStore.initStore()
   
@@ -206,10 +279,12 @@ onMounted(() => {
     router.push('/login')
   } else {
     // 加载公开房间列表
-    refreshRooms()
+    await refreshRooms()
     
     // 检查是否有活动房间并显示悬浮球
     checkActiveRoom()
+    // 添加全局点击监听器以关闭上下文菜单
+    document.addEventListener('click', handleClickOutsideMenu)
   }
 })
 
@@ -217,6 +292,8 @@ onBeforeUnmount(() => {
   // 移除可能添加的事件监听器
   document.removeEventListener('mousemove', dragBall)
   document.removeEventListener('mouseup', stopDragBall)
+  // 移除全局点击监听器
+  document.removeEventListener('click', handleClickOutsideMenu)
 })
 
 async function refreshRooms() {
@@ -254,7 +331,29 @@ async function handleLogout() {
   router.push('/login')
 }
 
-function validateAndCreateRoom() {
+// 新增：打开创建房间对话框前的检查
+const openCreateRoomDialog = () => {
+  if (userStore.user?.current_room) {
+    alert('您已在一个房间中，请先退出或返回房间后再创建。');
+  } else {
+    showCreateRoomDialog.value = true;
+    formError.value = ''; // 清空之前的错误
+  }
+};
+
+// 新增：打开加入房间对话框前的检查
+const openJoinRoomDialog = () => {
+  if (userStore.user?.current_room) {
+    alert('您已在一个房间中，请先退出或返回房间后再加入。');
+  } else {
+    showJoinRoomDialog.value = true;
+    joinFormError.value = ''; // 清空之前的错误
+    inviteCodeInput.value = ''; // 清空输入框
+  }
+};
+
+// 创建房间方法
+const validateAndCreateRoom = async () => {
   // 清除之前的错误信息
   formError.value = ''
   
@@ -316,7 +415,7 @@ async function createRoom() {
     isLoading.value = true
     
     // 调用创建房间API
-    const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/create`, {
+    const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/create_room`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -352,12 +451,36 @@ async function createRoom() {
   }
 }
 
-async function joinRoom(inviteCode) {
+// 处理弹窗加入
+const handleJoinFromDialog = () => {
+  joinFormError.value = ''
+  const code = inviteCodeInput.value.trim()
+  if (!code) {
+    joinFormError.value = '请输入邀请码'
+    return
+  }
+  // 调用已有的加入房间函数
+  joinRoom(code)
+  // 如果加入成功，joinRoom 内部会跳转，如果失败，错误信息会通过 alert 显示
+  // 如果 API 调用没有抛出错误但返回失败 (e.g., 房间满员)，我们可能需要检查结果并更新 joinFormError
+  // 这里暂时依赖 joinRoom 内部的 alert
+  // 如果加入成功，可以考虑关闭弹窗，尽管页面跳转会使其消失
+  // if (!joinFormError.value) { // 假设 joinRoom 会设置错误状态或抛出异常
+  //   showJoinRoomDialog.value = false;
+  // }
+  
+  // 简单处理：无论成功与否（跳转前），清空输入框
+  // inviteCodeInput.value = '' 
+  // 考虑到用户可能输错，不清空，方便修改
+}
+
+// 加入房间核心逻辑
+const joinRoom = async (inviteCode) => {
   try {
     isLoading.value = true
     
     // 调用加入房间API
-    const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/${inviteCode}/join`, {
+    const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/${inviteCode}/join_room`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -532,6 +655,96 @@ function closeMiniChat() {
   showMiniChat.value = false;
   showFloatingBall.value = true;
 }
+
+// --- 新增：上下文菜单逻辑 ---
+function showContextMenu(event, room) {
+  event.preventDefault(); // 阻止默认右键菜单
+  contextMenuRoom.value = room; // 保存被点击的房间信息
+
+  // 确保菜单先隐藏再计算位置，避免旧尺寸影响
+  contextMenuVisible.value = false; 
+  
+  nextTick(() => { // 在DOM更新后计算位置
+      const menuWidth = 150; // 菜单大致宽度
+      const menuHeight = 80; // 菜单大致高度
+      const clickX = event.clientX;
+      const clickY = event.clientY;
+      const screenWidth = window.innerWidth;
+      const screenHeight = window.innerHeight;
+
+      let left = clickX;
+      let top = clickY;
+
+      // 防止菜单超出屏幕右侧
+      if (clickX + menuWidth > screenWidth) {
+          left = screenWidth - menuWidth - 5; // 留一点边距
+      }
+      // 防止菜单超出屏幕底部
+      if (clickY + menuHeight > screenHeight) {
+          top = screenHeight - menuHeight - 5; // 留一点边距
+      }
+       // 防止菜单超出屏幕左侧 (虽然一般不会)
+      if (left < 0) left = 5;
+      // 防止菜单超出屏幕顶部 (虽然一般不会)
+      if (top < 0) top = 5;
+
+
+      contextMenuPosition.value = { top, left };
+      contextMenuVisible.value = true;
+  });
+}
+
+function closeContextMenu() {
+  contextMenuVisible.value = false;
+  contextMenuRoom.value = null;
+}
+
+function handleClickOutsideMenu(event) {
+  // 简单的判断逻辑，如果点击事件的目标不是菜单本身或其子元素，则关闭
+  // 注意：这种方式可能不够完美，更健壮的方式是检查 event.target 是否在 context-menu 元素内部
+  if (contextMenuVisible.value) {
+      // 查找 .context-menu 元素
+      const menuElement = document.querySelector('.context-menu');
+      const joinDialogElement = document.querySelector('.join-room-dialog'); // 检查是否点击了加入房间弹窗内部
+      const createDialogElement = document.querySelector('.create-room-dialog'); // 检查是否点击了创建房间弹窗内部
+
+      // 如果点击事件的目标不在菜单内，也不在任何打开的弹窗内，则关闭菜单
+      if (menuElement && !menuElement.contains(event.target) && 
+          (!joinDialogElement || !joinDialogElement.contains(event.target)) &&
+          (!createDialogElement || !createDialogElement.contains(event.target)) ) {
+           closeContextMenu();
+      }
+  }
+}
+
+// 处理右键菜单加入
+const handleJoinFromMenu = () => {
+  if (contextMenuRoom.value) {
+    // --- 新增：在这里也加入检查 --- 
+    if (userStore.user?.current_room) {
+      alert('您已在一个房间中，请先退出或返回房间后再加入。');
+      closeContextMenuAndDialogs(); // 关闭菜单
+      return; // 阻止后续加入操作
+    }
+    joinRoom(contextMenuRoom.value.invite_code);
+  }
+  closeContextMenuAndDialogs();
+};
+
+// 新增：处理头像加载失败
+function onAvatarError(event) {
+  event.target.src = '/default_avatar.jpg'; // 设置为默认头像
+}
+
+// --- 新增：统一关闭所有弹窗和菜单 ---
+function closeContextMenuAndDialogs() {
+  closeContextMenu()
+  // 如果有其他弹窗，也在这里关闭
+  // showCreateRoomDialog.value = false;
+  // showJoinRoomDialog.value = false;
+}
+
+// --- 结束：上下文菜单逻辑 ---
 </script>
 
 <style scoped>
@@ -540,6 +753,7 @@ function closeMiniChat() {
   background-color: #f5f7fa;
   display: flex;
   flex-direction: column;
+  position: relative; /* 确保弹窗定位正确 */
 }
 
 /* 顶部导航栏 */
@@ -649,6 +863,7 @@ function closeMiniChat() {
   margin: 0 auto;
   width: 100%;
   min-height: calc(100vh - 80px); /* 确保最小高度占满屏幕，减去顶部导航栏的高度 */
+  position: relative; /* 确保上下文菜单定位正确 */
 }
 
 .section-header {
@@ -736,93 +951,97 @@ function closeMiniChat() {
 /* 房间列表 */
 .room-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
   gap: 1.5rem;
-  min-height: 500px; /* 添加最小高度，确保即使房间很少也有足够的空间 */
+  padding-bottom: 2rem;
 }
 
 .room-card {
   background-color: white;
   border-radius: 10px;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
-  padding: 1.5rem;
-  transition: transform 0.2s;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.07);
+  padding: 1rem 1.2rem;
+  transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  min-height: 100px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
 }
 
 .room-card:hover {
   transform: translateY(-5px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
 }
 
-.room-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1rem;
+.host-avatar {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  background-color: #eee;
+}
+
+.room-card-content {
+  padding-right: 45px;
 }
 
 .room-name {
-  font-size: 1.2rem;
-  color: #495057;
-  margin: 0;
+  font-size: 1.15rem;
+  color: #333;
+  margin: 0 0 0.6rem 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.room-details {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.room-players {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.room-players i {
+  color: #888;
 }
 
 .room-status {
-  background-color: #28a745;
-  color: white;
-  padding: 0.25rem 0.5rem;
-  border-radius: 3px;
-  font-size: 0.8rem;
-}
-
-.room-info {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 1rem;
-  color: #6c757d;
-  font-size: 0.9rem;
-}
-
-.join-room-card-btn {
-  width: 100%;
-  background-color: #3b71ca;
-  color: white;
-  border: none;
+  padding: 0.2rem 0.5rem;
   border-radius: 4px;
-  padding: 0.6rem;
-  font-weight: bold;
-  cursor: pointer;
-  transition: background-color 0.2s;
+  font-weight: 500;
+  font-size: 0.75rem;
 }
 
-.join-room-card-btn:hover {
-  background-color: #2e5da3;
+.room-status.waiting {
+  background-color: #e6f7ff;
+  color: #1890ff;
+  border: 1px solid #91d5ff;
 }
 
-@media (max-width: 768px) {
-  .header {
-    flex-direction: column;
-    gap: 1rem;
-    padding: 1rem;
-  }
-  
-  .logo {
-    position: static;
-    transform: none;
-    order: -1;
-  }
-  
-  .action-buttons {
-    width: 100%;
-  }
-  
-  .create-room-btn, .join-room-btn {
-    flex: 1;
-  }
-  
-  .user-info {
-    width: 100%;
-    justify-content: space-between;
-  }
+.room-status.playing {
+  background-color: #fffbe6;
+  color: #faad14;
+  border: 1px solid #ffe58f;
+}
+
+/* 移除旧的按钮和信息 */
+.room-header, .room-info, .join-room-card-btn, .room-host {
+  display: none !important;
 }
 
 /* 创建房间弹窗样式 */
@@ -1178,5 +1397,102 @@ input:checked + .slider:before {
 
 .close-chat-button:hover {
   color: #ff7875;
+}
+
+/* 上下文菜单样式 */
+.context-menu {
+  position: fixed;
+  z-index: 1010;
+  background-color: white;
+  border-radius: 6px;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.15);
+  padding: 6px 0;
+  min-width: 160px;
+  border: 1px solid #eee;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 9px 16px;
+  font-size: 0.9rem;
+  color: #333;
+  cursor: pointer;
+  transition: background-color 0.15s ease-in-out;
+  white-space: nowrap;
+}
+.context-menu-item i {
+  color: #666;
+  width: 16px;
+  text-align: center;
+}
+
+.context-menu-item:hover {
+  background-color: #f5f5f5;
+}
+
+.context-menu-item.disabled {
+  color: #aaa;
+  cursor: not-allowed;
+  background-color: transparent;
+}
+.context-menu-item.disabled:hover {
+   background-color: transparent;
+}
+.context-menu-item.disabled i {
+   color: #ccc;
+}
+
+/* 响应式调整：在中等屏幕下每行显示2个 */
+@media (max-width: 992px) {
+  .room-list {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* 响应式调整：在小屏幕下每行显示1个 */
+@media (max-width: 600px) {
+  .room-list {
+    grid-template-columns: 1fr;
+  }
+   .header {
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem;
+  }
+  .logo {
+    position: static;
+    transform: none;
+    order: -1;
+  }
+  .action-buttons {
+    width: 100%;
+    order: 1;
+  }
+  .create-room-btn, .join-room-btn {
+    flex: 1;
+  }
+  .user-info {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
+/* 加入房间弹窗特定样式 (复用大部分创建房间弹窗样式) */
+.join-room-dialog {
+  background-color: white;
+  border-radius: 12px;
+  width: 400px; /* 比创建房间小一点 */
+  max-width: 90%;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+/* 加入房间弹窗的按钮图标 */
+.join-room-dialog .create-btn .icon {
+  font-style: normal;
+  font-weight: bold;
+  margin-right: 0.3rem; /* 图标和文字间距 */
 }
 </style>

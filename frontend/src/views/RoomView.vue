@@ -28,13 +28,31 @@
         >
           返回大厅
         </button>
+        <!-- 普通用户退出按钮 -->
         <button 
+          v-if="!isHost" 
           class="exit-button" 
-          @click="handleExitRoom"
-          :class="{ 'host-exit': isHost }"
+          @click="leaveRoom"
         >
-          {{ isHost ? '解散房间' : '退出房间' }}
+          退出房间
         </button>
+        <!-- 房主专属按钮 -->
+        <template v-if="isHost">
+          <button 
+            class="exit-button host-leave" 
+            @click="leaveRoom" 
+            title="退出房间并将房主移交给下一位玩家"
+          >
+            退出房间(移交)
+          </button>
+          <button 
+            class="exit-button host-disband" 
+            @click="disbandRoom"
+            style="margin-left: 8px;"
+          >
+            解散房间
+          </button>
+        </template>
       </div>
     </div>
 
@@ -419,8 +437,8 @@ export default {
       return;
     }
     
-    // 获取房间信息并初始化数据
-    if (await this.initRoomData(roomId)) {
+    // 获取房间信息并初始化数据 (移除对 tempRoomData 的依赖)
+    if (await this.initRoomDataFromAPI(roomId)) { // 修改调用的函数名
       // 连接WebSocket
       this.connectWebSocket();
     }
@@ -464,47 +482,46 @@ export default {
       }
     },
     
-    async initRoomData(roomId) {
+    // --- 重构：移除 initRoomData，改为始终从 API 获取 ---
+    async initRoomDataFromAPI(roomId) {
       try {
-        // 检查localStorage中是否有临时存储的房间数据
-        const tempRoomDataStr = localStorage.getItem('tempRoomData');
-        let tempRoomData = null;
+        this.isLoading = true; // 确保开始加载
+        this.loadingText = '正在加载房间信息...';
         
-        if (tempRoomDataStr) {
-          try {
-            tempRoomData = JSON.parse(tempRoomDataStr);
-            console.log('从localStorage加载的房间数据:', tempRoomData);
-            // 清除临时数据，避免下次进入时复用
-            localStorage.removeItem('tempRoomData');
-          } catch (e) {
-            console.error('解析临时房间数据失败:', e);
-          }
-        }
-        
-        // 检查localStorage中是否有缓存的活跃房间消息
+        // 检查localStorage中是否有缓存的活跃房间消息 (仅用于恢复消息)
         const activeRoomStr = localStorage.getItem('active_room');
-        let activeRoomData = null;
         let cachedMessages = [];
         let cachedSecretMessages = [];
         
         if (activeRoomStr) {
           try {
-            activeRoomData = JSON.parse(activeRoomStr);
+            const activeRoomData = JSON.parse(activeRoomStr);
             if (activeRoomData.invite_code === roomId) {
               cachedMessages = activeRoomData.messages || [];
               cachedSecretMessages = activeRoomData.secretMessages || [];
               console.log('从localStorage加载的房间消息:', cachedMessages.length, '条普通消息,', cachedSecretMessages.length, '条密语');
+              // 注意：这里不再加载用户列表和房间信息，只加载消息
             }
           } catch (e) {
             console.error('解析缓存的房间消息失败:', e);
           }
         }
+
+        // 从API获取房间信息
+        console.log(`正在从 API 获取房间 ${roomId} 的信息...`);
+        const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/${roomId}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}` // 确保token名称正确
+          }
+        });
         
-        // 如果有临时房间数据并且邀请码匹配
-        if (tempRoomData && tempRoomData.data && tempRoomData.data.invite_code === roomId) {
-          const roomData = tempRoomData.data.room_data;
-          
+        const result = await response.json();
+        console.log('API 获取房间信息响应:', result);
+        
+        if (result.success && result.data && result.data.room_data) {
           // 设置房间信息
+          const roomData = result.data.room_data;
           this.roomInfo = {
             name: roomData.room_name,
             invite_code: roomId,
@@ -513,182 +530,71 @@ export default {
             total_players: roomData.total_players || 8
           };
           
-          // 设置用户列表
+          // 设置用户列表 (使用 API 返回的数据)
           if (roomData.users && Array.isArray(roomData.users)) {
-            this.roomUsers = roomData.users.map(userId => {
-              // 如果是当前用户
-              if (userId === this.currentUser.id) {
-                return {
-                  id: this.currentUser.id,
-                  username: this.currentUser.username,
-                  avatar_url: this.currentUser.avatar_url || '/default_avatar.jpg'
-                };
-              }
-              // 如果是房主但不是当前用户
-              else if (userId === roomData.host_id) {
-                return {
-                  id: userId,
-                  username: '房主',
-                  avatar_url: '/default_avatar.jpg'
-                };
-              }
-              // 其他用户
-              else {
-                return {
-                  id: userId,
-                  username: `用户_${userId.slice(-4)}`,
-                  avatar_url: '/default_avatar.jpg'
-                };
-              }
-            });
+            // 假设 API 返回的 users 已经是包含 { id, username, avatar_url } 的对象数组
+            this.roomUsers = roomData.users;
+            console.log('通过 API 设置初始用户列表:', this.roomUsers);
           } else {
-            // 如果没有users数据，至少添加当前用户作为房主
-            this.roomUsers = [{
-              id: this.currentUser.id,
-              username: this.currentUser.username,
-              avatar_url: this.currentUser.avatar_url || '/default_avatar.jpg'
-            }];
+            console.warn('API 返回的房间数据中缺少有效的 users 列表，将仅包含当前用户');
+            // 如果没有users数据，至少添加当前用户
+             this.roomUsers = this.roomUsers.length > 0 ? this.roomUsers : [this.currentUser]; // 保留可能已有的当前用户信息
           }
           
           // 设置可以发送秘密消息的目标
           this.secretChatTargets = this.roomUsers.filter(user => user.id !== this.currentUser.id);
           
-          // 初始化消息数组(如果没有缓存的消息)
-          if (!cachedMessages.length) {
-            this.messages = [];
-          }
-          
-          // 优先使用缓存的消息
-          if (cachedMessages.length > 0) {
-            this.messages = cachedMessages;
-            console.log('已恢复', cachedMessages.length, '条缓存的消息');
-          } else {
-            // 如果没有缓存消息，添加一条系统消息
-            this.messages.push({
-              is_system: true,
-              content: `房间 "${this.roomInfo.name}" 已创建，等待其他玩家加入...`,
-              timestamp: Date.now()
-            });
-            
-            // 如果有消息历史，添加它们（检查并过滤掉内容为空的消息）
-            if (roomData.messages && Array.isArray(roomData.messages) && roomData.messages.length > 0) {
-              const validMessages = roomData.messages.filter(msg => 
-                msg.content && msg.content.trim() !== ''
-              );
-              this.messages.push(...validMessages);
-            }
-          }
-          
-          // 初始化秘密消息
-          if (cachedSecretMessages.length > 0) {
-            this.secretMessages = cachedSecretMessages;
-            console.log('已恢复', cachedSecretMessages.length, '条缓存的密语');
-          } else {
-            this.secretMessages = roomData.secret_chat_messages || [];
-          }
+          // 初始化消息 (优先使用缓存，否则使用 API 返回的)
+           if (cachedMessages.length > 0) {
+             this.messages = cachedMessages;
+             console.log('已恢复', cachedMessages.length, '条缓存的消息');
+           } else if (roomData.messages && Array.isArray(roomData.messages)) {
+             this.messages = roomData.messages.filter(msg => msg.content && msg.content.trim() !== '');
+             console.log('使用 API 返回的消息历史初始化:', this.messages.length, '条消息');
+             // 可以选择性地加一条进入房间的系统消息
+             if (!this.messages.some(msg => msg.is_system && msg.content.includes('进入房间'))) {
+                this.messages.unshift({
+                  is_system: true,
+                  content: `您已进入房间 "${this.roomInfo.name}"`,
+                  timestamp: Date.now()
+                });
+             }
+           } else {
+              this.messages = [{
+                is_system: true,
+                content: `您已进入房间 "${this.roomInfo.name}"`,
+                timestamp: Date.now()
+              }];
+              console.log('无缓存和 API 消息历史，添加初始进入消息');
+           }
+
+           // 初始化秘密消息 (优先使用缓存，否则使用 API 返回的)
+           if (cachedSecretMessages.length > 0) {
+             this.secretMessages = cachedSecretMessages;
+             console.log('已恢复', cachedSecretMessages.length, '条缓存的密语');
+           } else {
+             this.secretMessages = roomData.secret_chat_messages || [];
+             console.log('使用 API 返回的密语历史初始化:', this.secretMessages.length, '条密语');
+           }
           
           this.isLoading = false;
-          return true;
+          return true; // 初始化成功
         } else {
-          // 从API获取房间信息
-          const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/${roomId}`, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${localStorage.getItem('token')}`
-            }
-          });
-          
-          const result = await response.json();
-          
-          if (result.success) {
-            // 设置房间信息
-            const roomData = result.data.room_data;
-            this.roomInfo = {
-              name: roomData.room_name,
-              invite_code: roomId,
-              host_id: roomData.host_id,
-              status: roomData.status,
-              total_players: roomData.total_players || 8
-            };
-            
-            // 设置用户列表
-            if (roomData.users && Array.isArray(roomData.users)) {
-              this.roomUsers = roomData.users.map(userId => {
-                // 如果是当前用户
-                if (userId === this.currentUser.id) {
-                  return {
-                    id: this.currentUser.id,
-                    username: this.currentUser.username,
-                    avatar_url: this.currentUser.avatar_url || '/default_avatar.jpg'
-                  };
-                }
-                // 如果是房主但不是当前用户
-                else if (userId === roomData.host_id) {
-                  return {
-                    id: userId,
-                    username: '房主',
-                    avatar_url: '/default_avatar.jpg'
-                  };
-                }
-                // 其他用户
-                else {
-                  return {
-                    id: userId,
-                    username: `用户_${userId.slice(-4)}`,
-                    avatar_url: '/default_avatar.jpg'
-                  };
-                }
-              });
-            } else {
-              // 如果没有users数据，至少添加当前用户作为房主
-              this.roomUsers = [{
-                id: this.currentUser.id,
-                username: this.currentUser.username,
-                avatar_url: this.currentUser.avatar_url || '/default_avatar.jpg'
-              }];
-            }
-            
-            // 设置可以发送秘密消息的目标
-            this.secretChatTargets = this.roomUsers.filter(user => user.id !== this.currentUser.id);
-            
-            // 初始化消息
-            this.messages = [];
-            
-            // 只添加一条系统消息，带时间戳
-            const currentTime = Date.now();
-            this.messages.push({
-              is_system: true,
-              content: `房间 "${this.roomInfo.name}" 已创建，等待其他玩家加入...`,
-              timestamp: currentTime
-            });
-            
-            // 如果有消息历史，添加它们（检查并过滤掉内容为空的消息）
-            if (roomData.messages && Array.isArray(roomData.messages) && roomData.messages.length > 0) {
-              const validMessages = roomData.messages.filter(msg => 
-                msg.content && msg.content.trim() !== ''
-              );
-              this.messages.push(...validMessages);
-            }
-            
-            // 初始化秘密消息
-            this.secretMessages = roomData.secret_chat_messages || [];
-            
-            this.isLoading = false;
-            return true;
-          } else {
-            console.error('获取房间信息失败:', result.message);
-            this.showErrorModal('房间不存在或已被解散');
-            this.$router.push('/lobby');
-            return false;
-          }
+          console.error('获取房间信息失败 (API):', result.message);
+          this.showErrorModal(result.message || '房间不存在或无法加入');
+          this.$router.push('/lobby');
+          this.isLoading = false;
+          return false; // 初始化失败
         }
       } catch (error) {
-        console.error('初始化房间数据失败:', error);
-        this.showErrorModal('连接服务器失败，请重试');
+        console.error('初始化房间数据失败 (Catch):', error);
+        this.showErrorModal('连接服务器失败，请刷新重试');
         this.$router.push('/lobby');
-        return false;
+        this.isLoading = false;
+        return false; // 初始化失败
       }
     },
+    // --- 结束重构 ---
     
     connectWebSocket() {
       // 如果已经正在连接或已连接，不要重复连接
@@ -937,8 +843,9 @@ export default {
           }
           
           // 10秒内没有收到响应，认为连接已断开
+          // ---> 修改：增加前端等待 Pong 的超时时间 <--- 
           this.heartbeatTimeout = setTimeout(() => {
-            console.log('心跳超时，连接可能已断开');
+            console.log('心跳超时（等待Pong超时），连接可能已断开');
             if (this.websocket) {
               // 标记连接状态为断开
               this.connectionStatus = 'disconnected';
@@ -964,7 +871,7 @@ export default {
                 this.showErrorModal('网络连接失败，请刷新页面重试');
               }
             }
-          }, 10000);
+          }, 20000); // 从 10 秒增加到 20 秒
         } catch (error) {
           console.error('发送心跳失败:', error);
           // 发送失败，可能连接已断开
@@ -1110,9 +1017,21 @@ export default {
         this.messages.push(data);
       } else if (data.type === 'user_join' || data.type === 'user_leave') {
         // 处理用户加入/离开消息
-        // 刷新用户列表
-        this.getRoomUsers();
         
+        // --- 修改：直接使用 WebSocket 消息更新用户列表 ---
+        if (data.user_list && Array.isArray(data.user_list)) {
+          // 假设 data.user_list 包含完整的用户对象 { id, username, avatar_url }
+          this.roomUsers = data.user_list; 
+          // 更新秘密聊天目标（如果需要）
+          this.secretChatTargets = this.roomUsers.filter(user => user.id !== this.currentUser.id);
+          console.log('用户列表已通过 WebSocket 更新:', this.roomUsers);
+        } else {
+          // 如果消息中没有用户列表，发出警告
+          console.warn(`收到的 ${data.type} 消息中缺少 user_list，用户列表可能未更新`);
+          // 这里不再调用 getRoomUsers()
+        }
+        // --- 结束修改 ---
+
         // 添加系统通知
         if (data.content || data.message) {
           this.messages.push({
@@ -1165,6 +1084,30 @@ export default {
       } else if (data.type === 'error') {
         // 处理错误消息
         this.showErrorModal(data.content || data.message || '发生错误');
+      } else if (data.type === 'host_leave') { // --- 新增：处理房主离开并移交 --- 
+        // 1. 更新本地房主 ID
+        if (data.new_host_id) {
+          this.roomInfo.host_id = data.new_host_id;
+          console.log('房主已更新为:', data.new_host_id);
+        }
+        
+        // 2. 更新用户列表 (如果消息中包含)
+        if (data.user_list && Array.isArray(data.user_list)) {
+          this.roomUsers = data.user_list; 
+          this.secretChatTargets = this.roomUsers.filter(user => user.id !== this.currentUser.id);
+          console.log('用户列表已通过房主移交消息更新:', this.roomUsers);
+        } else {
+          console.warn('收到的 host_leave 消息中缺少 user_list');
+        }
+        
+        // 3. 添加系统通知 (保留 host_leave 的系统通知)
+        if (data.content || data.message) {
+          this.messages.push({
+            is_system: true,
+            content: data.content || data.message, // 消息内容应为 "XXX退出了房间，XXX成为新房主"
+            timestamp: data.timestamp || Date.now()
+          });
+        }
       } else {
         // 处理其他类型消息，确保有内容
         if ((data.content && data.content.trim() !== '') || 
@@ -1332,110 +1275,96 @@ export default {
       };
     },
     
-    async handleExitRoom() {
-      if (this.isHost) {
-        // 房主解散房间
-        if (confirm('确定要解散房间吗？')) {
-          try {
-            this.isLoading = true;
-            this.loadingText = '正在解散房间...';
-            // 调用解散房间API
-            const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/${this.roomInfo.invite_code}/delete`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('token')}`
-              }
-            });
-            
-            const result = await response.json();
-            if (result.success) {
-              // API请求成功后再关闭WebSocket连接
-              console.log('解散房间成功，正在关闭WebSocket连接');
-              this.connectionStatus = 'disconnected';
-              if (this.websocket) {
-                this.websocket.close();
-                this.websocket = null;
-              }
-              this.wsConnected = false;
-              
-              // 清除心跳
-              if (this.heartbeatInterval) {
-                clearInterval(this.heartbeatInterval);
-                this.heartbeatInterval = null;
-              }
-              
-              if (this.heartbeatTimeout) {
-                clearTimeout(this.heartbeatTimeout);
-                this.heartbeatTimeout = null;
-              }
-              
-              // 返回大厅并显示成功消息
-              alert('房间已成功解散');
-              this.$router.push('/lobby');
-            } else {
-              this.showErrorModal(`解散房间失败: ${result.message}`);
-              this.isLoading = false;
+    async leaveRoom() {
+      // 这个方法现在统一用于"退出"操作（包括房主移交和普通用户退出）
+      // 因为后端的 /leave_room API 会自动处理房主转移
+      if (confirm(this.isHost ? '确定要退出并将房主移交给下一位玩家吗？' : '确定要退出房间吗？')) {
+        try {
+          this.isLoading = true;
+          this.loadingText = '正在退出房间...';
+          const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/${this.roomInfo.invite_code}/leave_room`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${localStorage.getItem('token')}`
             }
-          } catch (error) {
-            console.error('解散房间失败:', error);
-            this.showErrorModal('解散房间时出错，请稍后重试');
+          });
+          
+          const result = await response.json();
+          if (result.success) {
+            this.cleanupAndRedirect(); // 调用清理和跳转逻辑
+            alert('已成功退出房间');
+          } else {
+            this.showErrorModal(`退出房间失败: ${result.message}`);
             this.isLoading = false;
           }
-        }
-      } else {
-        // 普通玩家退出房间
-        if (confirm('确定要退出房间吗？')) {
-          try {
-            this.isLoading = true;
-            this.loadingText = '正在退出房间...';
-            // 调用退出房间API
-            const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/${this.roomInfo.invite_code}/leave`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('token')}`
-              }
-            });
-            
-            const result = await response.json();
-            if (result.success) {
-              // API请求成功后再关闭WebSocket连接
-              console.log('退出房间成功，正在关闭WebSocket连接');
-              this.connectionStatus = 'disconnected';
-              if (this.websocket) {
-                this.websocket.close();
-                this.websocket = null;
-              }
-              this.wsConnected = false;
-              
-              // 清除心跳
-              if (this.heartbeatInterval) {
-                clearInterval(this.heartbeatInterval);
-                this.heartbeatInterval = null;
-              }
-              
-              if (this.heartbeatTimeout) {
-                clearTimeout(this.heartbeatTimeout);
-                this.heartbeatTimeout = null;
-              }
-              
-              // 返回大厅并显示成功消息
-              alert('已成功退出房间');
-              this.$router.push('/lobby');
-            } else {
-              this.showErrorModal(`退出房间失败: ${result.message}`);
-              this.isLoading = false;
-            }
-          } catch (error) {
-            console.error('退出房间失败:', error);
-            this.showErrorModal('退出房间时出错，请稍后重试');
-            this.isLoading = false;
-          }
+        } catch (error) {
+          console.error('退出房间失败:', error);
+          this.showErrorModal('退出房间时出错，请稍后重试');
+          this.isLoading = false;
         }
       }
     },
     
+    async disbandRoom() {
+      // 这个方法专门用于房主解散房间
+      if (!this.isHost) return; // 双重检查
+      
+      if (confirm('确定要解散房间吗？所有玩家将被踢出。')) {
+        try {
+          this.isLoading = true;
+          this.loadingText = '正在解散房间...';
+          // 调用解散房间API (后端应该是 delete_room)
+          const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/${this.roomInfo.invite_code}/delete_room`, {
+            method: 'POST', // 注意：后端 API 可能是 DELETE 或 POST，需确认
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${localStorage.getItem('token')}`
+            }
+          });
+          
+          const result = await response.json();
+          if (result.success) {
+            this.cleanupAndRedirect(); // 调用清理和跳转逻辑
+            alert('房间已成功解散');
+          } else {
+            this.showErrorModal(`解散房间失败: ${result.message}`);
+            this.isLoading = false;
+          }
+        } catch (error) {
+          console.error('解散房间失败:', error);
+          this.showErrorModal('解散房间时出错，请稍后重试');
+          this.isLoading = false;
+        }
+      }
+    },
+
+    // 提取清理 WebSocket 和重定向的逻辑
+    cleanupAndRedirect() {
+      console.log('正在清理WebSocket并重定向到大厅');
+      this.connectionStatus = 'disconnected'; // 标记为手动断开
+      if (this.websocket) {
+        this.websocket.close();
+        this.websocket = null;
+      }
+      this.wsConnected = false;
+      
+      // 清除心跳
+      if (this.heartbeatInterval) {
+        clearInterval(this.heartbeatInterval);
+        this.heartbeatInterval = null;
+      }
+      if (this.heartbeatTimeout) {
+        clearTimeout(this.heartbeatTimeout);
+        this.heartbeatTimeout = null;
+      }
+      
+      // 移除活跃房间缓存，因为用户已明确离开
+      localStorage.removeItem('active_room'); 
+      
+      this.$router.push('/lobby');
+    },
+
     copyInviteCode() {
       // 复制邀请码到剪贴板
       navigator.clipboard.writeText(this.roomInfo.invite_code)
@@ -1882,9 +1811,9 @@ handleEnterKey(event) {
 .system-content {
   display: inline-block;
   padding: 6px 12px;
-  background-color: rgba(0, 0, 0, 0.05);
+  background-color: rgba(0, 0, 0, 0.08); /* 稍微加深系统消息背景 */
   border-radius: 10px;
-  color: #777;
+  color: #666; /* 稍微加深系统消息文字 */
   font-size: 13px;
 }
 
@@ -1934,7 +1863,7 @@ handleEnterKey(event) {
 .text {
   padding: 8px 12px;
   border-radius: 10px;
-  background-color: #f1f1f1;
+  background-color: #E3F2FD; /* 修改：稍深的浅蓝 */
   word-break: break-all;
 }
 
@@ -1943,8 +1872,20 @@ handleEnterKey(event) {
 }
 
 .self-message .text {
-  background-color: #3b71ca;
+  background-color: #3b71ca; /* 自己消息，保持不变 */
   color: white;
+}
+
+/* 新增：AI 消息气泡颜色 (假设 .text 元素有 .ai-message-bubble 类) */
+.ai-message-bubble .text {
+  background-color: #F5F5F5; /* 稍深的浅灰 */
+  color: #333;
+}
+
+/* AI流式组件的样式 */
+.ai-stream-message .text {
+  background-color: #F5F5F5; /* 也应用到流式组件 */
+  color: #333;
 }
 
 .input-container {
@@ -1973,7 +1914,7 @@ handleEnterKey(event) {
   border-radius: 4px;
   outline: none;
   font-size: 1rem;
-  resize: none;
+  resize: none !important; /* 强制禁用调整大小手柄 */
   overflow-y: auto;
   min-height: 40px;
   max-height: 150px;
@@ -2580,5 +2521,26 @@ handleEnterKey(event) {
 /* AI流式消息相关样式 */
 .ai-stream-message {
   margin: 10px 0;
+}
+
+/* 房主退出(移交)按钮样式 */
+.exit-button.host-leave {
+  background-color: #FFA726; /* 橙色 */
+  color: white;
+}
+
+.exit-button.host-leave:hover {
+  background-color: #FFB74D;
+}
+
+/* 房主解散房间按钮样式 */
+.exit-button.host-disband {
+  background-color: #EF5350; /* 红色 */
+  color: white;
+  /* margin-left: 8px;  <-- 也可以在这里加，但行内 style 更直接 */
+}
+
+.exit-button.host-disband:hover {
+  background-color: #E57373;
 }
 </style> 

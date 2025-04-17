@@ -1,5 +1,5 @@
 """
-谁是卧底多人聊天系统v0.0.6
+谁是卧底多人聊天系统v0.0.7
 
 Description:
     提供给前端的API接口层、系统全局监测、websocket全局管理
@@ -12,7 +12,9 @@ Note:
     - 用户相关API：
         注册用户、登陆用户、登出用户、获取用户信息、刷新Access_token、刷新Refresh_token
     - 房间相关API：
-        创建房间、删除房间、刷新公共房间
+        创建房间、删除房间
+        刷新公共房间
+        加入房间、退出房间
 """
 
 import time
@@ -350,6 +352,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 # 解析消息内容
                 try:
                     message_data = json.loads(raw_message)
+                    
+                    # 收到任何有效消息后，更新活动时间戳
+                    await websocket_manager.update_connection_state(room_id, user_id)
+                    logger.debug(f"用户 {user_id} 在房间 {room_id} 的活动时间已更新")
                     
                     # 处理心跳消息
                     if message_data.get("type") == "ping":
@@ -692,7 +698,27 @@ async def rotate_token(request: Request):
 
 
 # 房间相关API
-@app.post("/api/room/create")
+@app.get("/api/room/{invite_code}")
+async def get_room_details(invite_code: str):
+    """获取房间详细信息API"""
+    try:
+        # 调用RoomService获取房间详情
+        result = await room_service.get_room_details(invite_code)
+        
+        if not result["success"]:
+            # 根据错误消息决定状态码
+            status_code = 404 if "不存在" in result["message"] else 400
+            raise HTTPException(status_code=status_code, detail=result["message"])
+        
+        # 直接返回业务层的结果，已包含 room_data
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取房间 {invite_code} 详情时发生错误: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取房间详情失败: {str(e)}")
+
+@app.post("/api/room/create_room")
 async def create_room(room_data: Dict[str, Any], request: Request):
     """创建房间API"""
     try:
@@ -713,10 +739,7 @@ async def create_room(room_data: Dict[str, Any], request: Request):
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
             
-        # 添加WebSocket连接信息到响应中
-        if "data" in result and "invite_code" in result["data"]:
-            result["data"]["ws_endpoint"] = f"/ws/{result['data']['invite_code']}"
-            
+        # 直接返回服务层简化后的结果 {success, message, data:{invite_code}}
         return result
     except AttributeError:
         # 处理request.state.user_id不存在的情况
@@ -726,7 +749,7 @@ async def create_room(room_data: Dict[str, Any], request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/room/{invite_code}/delete")
+@app.post("/api/room/{invite_code}/delete_room")
 async def delete_room(invite_code: str, request: Request):
     """删除房间API"""
     try:
@@ -738,6 +761,7 @@ async def delete_room(invite_code: str, request: Request):
 
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
+        # 直接返回服务层的结果 {success, message, data:{reason}}
         return result
     except AttributeError:
         # 处理request.state.user_id不存在的情况
@@ -756,6 +780,48 @@ async def refresh_public_rooms():
         return result
     except Exception as e:
         logger.error(f"获取公开房间列表失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/room/{invite_code}/join_room")
+async def join_room(invite_code: str, request: Request):
+    """加入房间API"""
+    try:
+        # 从请求状态中获取用户ID
+        user_id = request.state.user_id
+        
+        # 调用房间服务加入房间
+        result = await room_service.join_room(invite_code, user_id)
+        
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+        # 直接返回服务层简化后的结果 {success, message}
+        return result
+    except AttributeError:
+        # 处理request.state.user_id不存在的情况
+        raise HTTPException(status_code=401, detail="未授权，请重新登录")
+    except Exception as e:
+        logger.error(f"加入房间失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/room/{invite_code}/leave_room")
+async def leave_room(invite_code: str, request: Request):
+    """退出房间API"""
+    try:
+        # 从请求状态中获取用户ID
+        user_id = request.state.user_id
+        
+        # 调用房间服务退出房间
+        result = await room_service.leave_room(invite_code, user_id)
+        
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+        # 直接返回服务层的结果 {success, message}
+        return result
+    except AttributeError:
+        # 处理request.state.user_id不存在的情况
+        raise HTTPException(status_code=401, detail="未授权，请重新登录")
+    except Exception as e:
+        logger.error(f"退出房间失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

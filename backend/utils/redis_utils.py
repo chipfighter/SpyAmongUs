@@ -230,7 +230,7 @@ class RedisClient:
 
     # 房间相关
     async def cache_room(self, invite_code: str, room_data: dict) -> bool:
-        """将房间数据存入Redis缓存
+        """将房间数据存入Redis缓存，创建房间的操作
 
         Args:
             invite_code: 房间邀请码
@@ -244,6 +244,7 @@ class RedisClient:
             存活玩家、角色分配、投票纪录、秘密聊天投票、秘密聊天消息 在游戏开始的时候进行
         """
         try:
+            # 直接使用room_data，无需过滤字段（Room模型已精简）
             # 转换所有值为字符串
             string_data = {k: str(v) if v is not None else "" for k, v in room_data.items()}
 
@@ -252,12 +253,13 @@ class RedisClient:
             await self._redis.hmset(room_key, string_data)
 
             # 2. 如果是公开房间，添加到公开房间集合
-            if string_data.get("is_public") == "True":
+            if string_data.get("is_public") == "true":  # true转化为小写，而非大写操作
                 await self._redis.sadd(PUBLIC_ROOMS_KEY, invite_code)
 
             # 3. 创建房间的用户集合（只有房主）
             users_key = ROOM_USERS_KEY_PREFIX % invite_code
-            await self._redis.sadd(users_key, room_data["host_id"])
+            timestamp = int(time.time() * 1000)
+            await self._redis.zadd(users_key, {room_data["host_id"]: timestamp})
 
             # 4. 初始化空的准备用户集合
             ready_users_key = ROOM_READY_USERS_KEY_PREFIX % invite_code
@@ -284,29 +286,25 @@ class RedisClient:
             return False
 
     async def update_room_user(self, invite_code: str, user_id: str) -> bool:
-        """将用户添加到房间"""
+        """将用户添加到房间，使用时间戳记录加入顺序"""
         try:
-            # 将用户添加到房间用户集合
             users_key = ROOM_USERS_KEY_PREFIX % invite_code
-            await self._redis.sadd(users_key, user_id)
-
+            # 使用时间戳作为分数
+            timestamp = int(time.time() * 1000)
+            await self._redis.zadd(users_key, {user_id: timestamp})
             return True
         except Exception as e:
             logger.error(f"添加用户到房间失败: {str(e)}")
             return False
 
     async def delete_room_user(self, invite_code: str, user_id: str) -> bool:
-        """从房间中删除特定用户
-
-        Notes:
-            仅仅提供删除房间用户的redis操作，所有逻辑判断都在room_service
-        """
+        """从房间中删除特定用户"""
         try:
             # 从房间用户集合中移除用户
             users_key = ROOM_USERS_KEY_PREFIX % invite_code
-            await self._redis.srem(users_key, user_id)
+            await self._redis.zrem(users_key, user_id)
 
-            # 从准备用户集合中移除用户
+            # 从准备用户集合中移除用户(保持Set不变)
             ready_users_key = ROOM_READY_USERS_KEY_PREFIX % invite_code
             await self._redis.srem(ready_users_key, user_id)
 
@@ -390,13 +388,24 @@ class RedisClient:
             logger.error(f"获取房间数据失败: {str(e)}")
             return {}
 
-    async def get_room_users(self, invite_code: str) -> Set[str]:
-        """获取房间中的所有用户ID（在房间的用户）"""
+    async def get_room_users(self, invite_code: str) -> list[str]:
+        """获取房间中的所有用户ID（按加入顺序）"""
         try:
             users_key = ROOM_USERS_KEY_PREFIX % invite_code
-            return await self._redis.smembers(users_key)
+            # 使用zrange按分数(加入时间)排序获取所有用户 (返回 List[str])
+            user_list = await self._redis.zrange(users_key, 0, -1) 
+            return user_list # 直接返回有序列表
         except Exception as e:
             logger.error(f"获取房间用户失败: {str(e)}")
+            return [] # 返回空列表
+
+    async def get_room_ready_users(self, invite_code: str) -> Set[str]:
+        """获取房间中已准备的用户ID"""
+        try:
+            ready_users_key = ROOM_READY_USERS_KEY_PREFIX % invite_code
+            return set(await self._redis.smembers(ready_users_key))
+        except Exception as e:
+            logger.error(f"获取房间准备用户失败: {str(e)}")
             return set()
 
     async def get_public_rooms(self) -> list:
@@ -423,7 +432,7 @@ class RedisClient:
         """获取房间用户数量"""
         try:
             users_key = ROOM_USERS_KEY_PREFIX % invite_code
-            count = await self._redis.scard(users_key)
+            count = await self._redis.zcard(users_key)
             return count
         except Exception as e:
             logger.error(f"获取房间用户数量失败: {str(e)}")
@@ -442,9 +451,39 @@ class RedisClient:
         """检查用户是否在指定房间内"""
         try:
             users_key = ROOM_USERS_KEY_PREFIX % invite_code
-            return await self._redis.sismember(users_key, user_id)
+            # 使用zscore检查用户是否存在及其加入时间
+            return await self._redis.zscore(users_key, user_id) is not None
         except Exception as e:
             logger.error(f"检查用户是否在房间内失败: {str(e)}")
+            return False
+
+    async def get_next_user_by_join_time(self, invite_code: str, exclude_user_id: str) -> Optional[str]:
+        """获取按加入时间排序的下一个用户（不包括指定用户）"""
+        try:
+            users_key = ROOM_USERS_KEY_PREFIX % invite_code
+            # 获取所有用户（按加入时间排序）
+            users = await self._redis.zrange(users_key, 0, -1)
+
+            # 过滤掉要排除的用户ID
+            filtered_users = [u for u in users if u != exclude_user_id]
+
+            # 如果有用户，返回第一个（最早加入的）
+            if filtered_users:
+                return filtered_users[0]
+            return None
+        except Exception as e:
+            logger.error(f"获取下一个用户失败: {str(e)}")
+            return None
+
+    async def update_room_host(self, invite_code: str, new_host_id: str) -> bool:
+        """更新房间的房主"""
+        try:
+            room_key = f"{ROOM_KEY_PREFIX}{invite_code}"
+            await self._redis.hset(room_key, "host_id", new_host_id)
+            logger.info(f"房间 {invite_code} 的房主已更新为 {new_host_id}")
+            return True
+        except Exception as e:
+            logger.error(f"更新房间房主失败: {str(e)}")
             return False
 
 

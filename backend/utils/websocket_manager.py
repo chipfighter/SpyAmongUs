@@ -24,8 +24,8 @@ class WebSocketManager:
         self.room_connections = {}
         # 保存连接状态 room_id -> {user_id -> {"last_activity": timestamp, "status": "connected"}}
         self.connection_states = {}
-        # 心跳超时时间（秒）
-        self.heartbeat_timeout = 30
+        # 心跳超时时间（秒） - 增大阈值
+        self.heartbeat_timeout = 60
         # 清理任务
         self.cleanup_task = None
 
