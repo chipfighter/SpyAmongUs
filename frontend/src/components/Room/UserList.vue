@@ -1,16 +1,16 @@
 <template>
-  <div class="users-container" :class="{ 'collapsed': isCollapsed }">
+  <div class="users-container" :class="{ 'collapsed': isCollapsed, 'transitioning': isTransitioning }">
     <div class="resize-handle" @mousedown="emit('start-resize', $event)"></div>
     <div class="users-header">
-      <h3>玩家列表 ({{ users.length }}/{{ totalPlayers || 8 }})</h3>
-      <button class="collapse-btn" @click="emit('toggle-collapse')">
+      <button class="collapse-btn" @click="handleToggleCollapse">
         {{ isCollapsed ? '◀' : '▶' }}
       </button>
+      <h3>玩家列表 ({{ users.length }}/{{ totalPlayers || 8 }})</h3>
     </div>
     
     <div class="users-list">
       <!-- 真实用户 -->
-      <div v-for="user in users" :key="user.id" class="user-item">
+      <div v-for="user in users" :key="user.id" class="user-item" @click="user.id !== currentUserId && toggleActionButtons(user.id)">
         <div class="user-avatar">
           <img :src="user.avatar_url || '/default_avatar.jpg'" alt="用户头像" @error="onAvatarError">
           <span v-if="user.id === hostId" class="host-badge">房主</span>
@@ -18,6 +18,27 @@
         <div class="user-name">
           {{ user.username || user.username }}
           <span v-if="readyUsers.includes(user.id)" class="ready-badge">准备</span>
+        </div>
+        
+        <!-- 用户操作按钮组 - 只对非当前用户显示 -->
+        <div v-if="selectedUserId === user.id && user.id !== currentUserId" class="user-actions">
+          <button class="action-btn" title="添加好友" @click.stop="emit('add-friend', user.id)">
+            <i class="action-icon">👥</i>
+            <span class="action-text">添加好友</span>
+          </button>
+          <button class="action-btn" title="用户详情" @click.stop="emit('view-user-details', user.id)">
+            <i class="action-icon">ℹ️</i>
+            <span class="action-text">用户详情</span>
+          </button>
+          <button class="action-btn" title="私信" @click.stop="emit('private-message', user.id)">
+            <i class="action-icon">✉️</i>
+            <span class="action-text">发送私信</span>
+          </button>
+          <!-- 房主可见的踢出按钮 -->
+          <button v-if="isHost && user.id !== currentUserId" class="action-btn kick-btn" title="踢出房间" @click.stop="emit('kick-user', user.id)">
+            <i class="action-icon">🚫</i>
+            <span class="action-text">踢出房间</span>
+          </button>
         </div>
       </div>
       
@@ -78,7 +99,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 
 const props = defineProps({
   users: {
@@ -132,8 +153,63 @@ const emit = defineEmits([
   'toggle-ready', 
   'toggle-secret-chat',
   'start-resize',
-  'start-game'
+  'start-game',
+  'add-friend',
+  'view-user-details',
+  'private-message',
+  'kick-user'
 ]);
+
+// 添加过渡状态
+const isTransitioning = ref(false);
+
+// 处理折叠/展开带有动画效果
+const handleToggleCollapse = () => {
+  isTransitioning.value = true;
+  
+  // 延迟状态切换，让按钮先隐藏
+  setTimeout(() => {
+    emit('toggle-collapse');
+    
+    // 过渡完成后移除过渡状态
+    setTimeout(() => {
+      isTransitioning.value = false;
+    }, 300); // 与CSS过渡时间匹配
+  }, 150);
+};
+
+// 添加选中用户状态
+const selectedUserId = ref(null);
+
+// 切换显示用户操作按钮
+const toggleActionButtons = (userId) => {
+  if (selectedUserId.value === userId) {
+    selectedUserId.value = null; // 如果已选中则隐藏
+  } else {
+    selectedUserId.value = userId; // 否则选中新用户
+  }
+};
+
+// 添加点击文档其他位置关闭操作按钮的事件
+const closeActionButtons = () => {
+  selectedUserId.value = null;
+};
+
+// 在组件挂载时添加事件监听
+onMounted(() => {
+  document.addEventListener('click', (event) => {
+    // 检查点击是否在用户列表外
+    const usersList = document.querySelector('.users-list');
+    if (usersList && !usersList.contains(event.target) && selectedUserId.value !== null) {
+      closeActionButtons();
+    }
+  });
+});
+
+// 在组件卸载时移除事件监听
+onBeforeUnmount(() => {
+  document.removeEventListener('click', closeActionButtons);
+});
 
 const canStartGame = computed(() => {
   // 最少需要3名玩家
@@ -191,14 +267,14 @@ const onAvatarError = (event) => {
 /* .resize-handle:hover::before { ... } */
 
 .users-container.collapsed {
-  width: 60px;
+  width: 60px !important; /* 添加!important确保折叠时覆盖inline style */
 }
 
 .users-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
-  padding: 10px 15px;
+  padding: 15px;
   border-bottom: 1px solid #f0f0f0;
 }
 
@@ -208,6 +284,8 @@ const onAvatarError = (event) => {
   font-weight: 500;
   white-space: nowrap; /* 防止折叠时文字换行 */
   overflow: hidden;
+  flex: 1;
+  margin-left: 10px;
 }
 
 .users-container.collapsed .users-header h3,
@@ -223,12 +301,16 @@ const onAvatarError = (event) => {
   cursor: pointer;
   padding: 5px;
   border-radius: 4px;
-  transition: all 0.2s;
-  flex-shrink: 0; /* 防止按钮被挤压 */
+  transition: opacity 0.15s ease;
+  flex-shrink: 0;
 }
 
 .collapse-btn:hover {
   background-color: #f0f0f0;
+}
+
+.transitioning .collapse-btn {
+  opacity: 0;
 }
 
 .users-list {
@@ -240,8 +322,17 @@ const onAvatarError = (event) => {
 .user-item {
   display: flex;
   align-items: center;
-  padding: 8px 0;
+  padding: 8px 10px;
   border-bottom: 1px solid #f9f9f9;
+  cursor: pointer;
+  position: relative;
+  transition: background-color 0.2s ease;
+  border-radius: 4px;
+  margin-bottom: 2px;
+}
+
+.user-item:hover {
+  background-color: #f5f5f5;
 }
 
 .user-avatar {
@@ -277,6 +368,7 @@ const onAvatarError = (event) => {
   white-space: nowrap; /* 防止名字过长换行 */
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
 }
 
 .ready-badge {
@@ -296,6 +388,65 @@ const onAvatarError = (event) => {
 
 .ai-assistant .user-name {
   color: #1890ff;
+}
+
+/* 用户操作按钮样式 */
+.user-actions {
+  display: flex;
+  flex-direction: column;
+  background: white;
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  padding: 6px;
+  position: absolute;
+  left: 10px;
+  top: 100%;
+  transform: translateY(0);
+  z-index: 5;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-5%) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.action-btn {
+  background: none;
+  border: none;
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin: 2px 0;
+  white-space: nowrap;
+  color: #333;
+}
+
+.action-btn:hover {
+  background-color: #f0f0f0;
+}
+
+.action-icon {
+  font-size: 16px;
+  line-height: 1;
+  margin-right: 8px;
+  width: 20px;
+  text-align: center;
+}
+
+.action-text {
+  font-size: 14px;
+}
+
+.kick-btn {
+  color: #ff4d4f;
+}
+
+.kick-btn:hover {
+  background-color: #fff1f0;
 }
 
 .secret-chat-area {

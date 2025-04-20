@@ -340,7 +340,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         await websocket_manager.add_connection(room_id, user_id, websocket)
         logger.info(f"用户 {user_id} 已添加到房间 {room_id} 的WebSocket连接管理器")
 
-        # --- 获取房间信息并确定上下文 ---
         room_info = await room_service.get_room_basic_data(room_id)
         context = "join"
         room_name = "未知房间"
@@ -349,7 +348,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         if room_info and room_info.get("room_name"):
             room_name = room_info["room_name"]
         logger.info(f"用户 {user_id} 连接房间 {room_id} 的上下文: {context}, 房间名: {room_name}")
-        # ---------------------------------
 
         # 4.发送连接成功消息 (添加 context 和 room_name)
         await websocket.send_json({

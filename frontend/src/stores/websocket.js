@@ -333,6 +333,34 @@ export const useWebsocketStore = defineStore('websocket', {
       this.isConnected = false;
       this.connectionStatus = 'disconnected';
       
+      // 检查是否是"房间已关闭"的情况
+      if (event.reason === "房间已关闭") {
+        console.log('[WS] 检测到房间已关闭');
+        
+        // 清理房间相关数据
+        const roomStore = useRoomStore();
+        const chatStore = useChatStore();
+        const userStore = useUserStore();
+        
+        // 获取当前用户ID和房间主人ID
+        const currentUserId = userStore.user?.id;
+        const hostId = roomStore.roomInfo?.host_id;
+        const isCurrentUserHost = currentUserId === hostId;
+        
+        // 清理数据
+        chatStore.clearMessages();
+        roomStore.clearRoomState();
+        
+        // 只有非房主才显示"房主已解散房间"的提示
+        if (!isCurrentUserHost) {
+          console.log('[WS] 非房主用户收到房间解散通知，显示提示并跳转');
+          alert('房主已解散房间，您将返回大厅');
+          window.location.href = '/lobby';
+        }
+        
+        return; // 提前返回，不尝试重连
+      }
+      
       const unexpectedClose = event.code !== 1000 && event.code !== 1001;
       const shouldTryReconnect = (wasConnected || previousStatus === 'connecting');
       const MAX_RECONNECT_ATTEMPTS = 3;
