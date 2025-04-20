@@ -305,8 +305,19 @@ export default {
   },
   beforeUnmount() {
     console.log('组件卸载，清理资源');
-    this.websocketStore.disconnect();
-    this.roomStore.clearRoomState();
+    
+    // 检查是否是临时返回大厅（从URL参数判断）
+    const keepConnection = this.$route.query.keep_connection === 'true';
+    
+    if (!keepConnection) {
+      // 只有在非临时返回大厅的情况下才断开WebSocket
+      console.log('[RoomView] 组件卸载，断开WebSocket连接');
+      this.websocketStore.disconnect();
+      this.roomStore.clearRoomState();
+    } else {
+      console.log('[RoomView] 临时返回大厅，保持WebSocket连接');
+      // 不清除房间状态，保持连接
+    }
   },
   methods: {
     async handleLeaveRoom() {
@@ -570,7 +581,11 @@ export default {
       this.showFloatingBall = true; 
       this.showMiniChat = false;
       
-      this.router.push('/lobby?in_room=true');
+      // 不要断开WebSocket连接
+      console.log('[RoomView] 返回大厅，保持WebSocket连接');
+      
+      // 在URL中添加参数，表示只是临时返回大厅
+      this.router.push('/lobby?in_room=true&keep_connection=true');
     },
     handleStartGame() {
       console.log('[RoomView] Start game button clicked by host.');

@@ -288,23 +288,27 @@ const webSocketConnectionError = ref(null) // Store WebSocket connection error
 // 在顶部变量声明部分添加
 const autoRefreshInterval = ref(null);
 
+// 添加一个防重复刷新的标志
+const isRefreshingInProgress = ref(false);
+
 onMounted(async () => {
-  // 初始化用户数据
+  // 初始用户数据
   userStore.initStore()
   
   // 如果没有登录则跳转到登录页
   if (!userStore.isAuthenticated) {
     router.push('/login')
   } else {
-    // 检查路由参数，如果是从房间退出回来的，立即刷新
+    // 检查路由参数，确定是否是从房间回来的
     const fromRoom = route.query.from_room === 'true'
+    const initialLoad = ref(true);
     
-    // 加载公开房间列表
+    // 初始加载时刷新一次
     await refreshRooms()
     
     // 检查是否有活动房间并显示悬浮球
     checkActiveRoom()
-    // 添加全局点击监听器以关闭上下文菜单
+    // 添加全局点击监听器
     document.addEventListener('click', handleClickOutsideMenu)
     
     // 启动自动刷新
@@ -313,14 +317,33 @@ onMounted(async () => {
     // 添加页面可见性变化监听
     document.addEventListener('visibilitychange', handleVisibilityChange)
     
-    // 添加路由变化监听，用于检测用户从房间返回大厅
-    router.afterEach((to, from) => {
-      // 如果是导航到大厅页面
-      if (to.name === 'lobby' || to.path === '/') {
-        console.log('[LobbyView] 检测到路由变化，返回大厅，立即刷新')
-        refreshRooms() // 立即刷新房间列表
+    // 移除先前的afterEach监听器（如果有）
+    if (window._lobbyRouteGuard) {
+      if (router.afterEach.indexOf && router.afterEach.indexOf(window._lobbyRouteGuard) > -1) {
+        router.afterEach.splice(router.afterEach.indexOf(window._lobbyRouteGuard), 1);
       }
-    })
+    }
+    
+    // 延迟设置路由钩子，避免与初始加载冲突
+    setTimeout(() => {
+      initialLoad.value = false;
+      
+      // 添加路由变化监听，用于检测用户从房间返回大厅
+      window._lobbyRouteGuard = (to, from) => {
+        // 仅当从房间页面导航到大厅页面，且不是初始加载时触发刷新
+        if (!initialLoad.value && (to.name === 'lobby' || to.path === '/') && from.path.includes('/room/')) {
+          console.log('[LobbyView] 检测到从房间返回大厅，准备刷新');
+          // 确保不会与初始加载冲突
+          if (!isRefreshingInProgress.value) {
+            refreshRooms();
+            // 重启自动刷新计时器
+            startAutoRefresh();
+          }
+        }
+      };
+      
+      router.afterEach(window._lobbyRouteGuard);
+    }, 500); // 等待初始加载完成
   }
 })
 
@@ -336,9 +359,19 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 
+// 修改refreshRooms函数，保证动画效果一致
 async function refreshRooms() {
-  isLoading.value = true
-  isRefreshing.value = true
+  // 避免并发刷新请求
+  if (isRefreshingInProgress.value) {
+    console.log('[LobbyView] 刷新操作正在进行中，跳过重复刷新');
+    return;
+  }
+  
+  isRefreshingInProgress.value = true;
+  isLoading.value = true;
+  isRefreshing.value = true; // 确保按钮动画显示
+  
+  console.log('[LobbyView] 开始刷新房间列表');
   
   try {
     // 调用API获取公开房间列表
@@ -364,11 +397,14 @@ async function refreshRooms() {
     console.error('获取房间列表失败:', error)
     publicRooms.value = []
   } finally {
-    isLoading.value = false
+    isLoading.value = false;
     
+    // 保证动画至少显示1秒
     setTimeout(() => {
-      isRefreshing.value = false
-    }, 800)
+      isRefreshing.value = false;
+      isRefreshingInProgress.value = false;
+      console.log('[LobbyView] 刷新动画结束，解除锁定');
+    }, 1000);
   }
 }
 
@@ -845,18 +881,22 @@ watch(webSocketConnectionError, (newError) => {
   }
 });
 
-// 添加自动刷新相关方法
+// 修改startAutoRefresh函数，确保先停止旧计时器，并增加日志
 function startAutoRefresh() {
-  // 清除可能存在的旧计时器
-  stopAutoRefresh()
+  // 确保先停止旧计时器
+  stopAutoRefresh();
   
   // 只有在页面可见时才启动自动刷新
   if (document.visibilityState === 'visible') {
-    console.log('[LobbyView] 启动自动刷新，间隔15秒')
+    console.log('[LobbyView] 启动自动刷新计时器，间隔15秒');
     autoRefreshInterval.value = setInterval(() => {
-      console.log('[LobbyView] 执行自动刷新')
-      refreshRooms() // 调用刷新函数，会触发动画效果
-    }, 15000) // 15秒
+      console.log('[LobbyView] 自动刷新计时器触发');
+      if (!isRefreshingInProgress.value) {
+        refreshRooms();
+      } else {
+        console.log('[LobbyView] 跳过自动刷新，因为上一次刷新尚未完成');
+      }
+    }, 15000); // 15秒
   }
 }
 
@@ -871,9 +911,8 @@ function stopAutoRefresh() {
 // 处理页面可见性变化
 function handleVisibilityChange() {
   if (document.visibilityState === 'visible') {
-    console.log('[LobbyView] 页面变为可见，立即刷新并启动自动刷新')
-    refreshRooms() // 页面变为可见时立即刷新一次
-    startAutoRefresh() // 然后启动自动刷新
+    console.log('[LobbyView] 页面变为可见，启动自动刷新')
+    startAutoRefresh() // 页面可见时启动自动刷新计时器，继续之前的计时
   } else {
     console.log('[LobbyView] 页面变为不可见，停止自动刷新')
     stopAutoRefresh() // 页面不可见时停止自动刷新
