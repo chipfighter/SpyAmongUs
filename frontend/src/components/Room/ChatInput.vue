@@ -145,13 +145,7 @@ const handleMentionNavigation = (event) => {
   const totalOptions = filteredMentionUsers.value.length + (showAiAssistant.value ? 1 : 0);
   if (totalOptions === 0) return;
 
-  if (event.key === 'ArrowDown') {
-    event.preventDefault();
-    selectedMentionIndex.value = (selectedMentionIndex.value + 1) % totalOptions;
-  } else if (event.key === 'ArrowUp') {
-    event.preventDefault();
-    selectedMentionIndex.value = (selectedMentionIndex.value - 1 + totalOptions) % totalOptions;
-  } else if (event.key === 'Escape') {
+  if (event.key === 'Escape') {
     event.preventDefault();
     showMentionPopup.value = false;
   } else if (event.key === 'Tab' || event.key === 'Enter') { // Allow Enter here as well

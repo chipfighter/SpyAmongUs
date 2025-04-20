@@ -34,14 +34,29 @@
     </div>
     
     <!-- 按钮区域 -->
-    <div class="secret-chat-area">
-      <button 
-        v-if="gameStarted" 
-        class="secret-chat-button" 
-        @click="emit('toggle-secret-chat')" 
-      >
-        秘密聊天
-      </button>
+    <div class="secret-chat-area" v-if="!gameStarted">
+      <!-- Host: 房主按钮区 -->
+      <div v-if="isHost" class="host-buttons">
+        <!-- Start Game Button -->
+        <button 
+          class="start-game-button" 
+          @click="emit('start-game')" 
+          :disabled="!canStartGame"
+          :title="canStartGame ? '开始游戏' : '等待所有玩家准备'"
+        >
+          开始游戏
+        </button>
+        
+        <!-- Host Ready Button -->
+        <button 
+          class="ready-game-button host-ready-button" 
+          @click="emit('toggle-ready')"
+        >
+          {{ isReady ? '取消准备' : '准备游戏' }}
+        </button>
+      </div>
+      
+      <!-- Non-Host: Ready/Cancel Button -->
       <button 
         v-else 
         class="ready-game-button" 
@@ -49,6 +64,15 @@
       >
         {{ isReady ? '取消准备' : '准备游戏' }}
       </button>
+      
+       <!-- Secret Chat Button (shown only when game started) -->
+       <button 
+         v-if="gameStarted" 
+         class="secret-chat-button" 
+         @click="emit('toggle-secret-chat')" 
+       >
+         秘密聊天
+       </button>
     </div>
   </div>
 </template>
@@ -72,7 +96,7 @@ const props = defineProps({
     required: true,
     default: 8
   },
-  currentUserId: { // 虽然模板没直接用，但可能未来逻辑需要
+  currentUserId: { 
     type: String,
     required: true,
     default: ''
@@ -96,6 +120,10 @@ const props = defineProps({
     type: Boolean,
     required: true,
     default: false
+  },
+  isHost: {
+    type: Boolean,
+    required: true
   }
 });
 
@@ -103,12 +131,25 @@ const emit = defineEmits([
   'toggle-collapse', 
   'toggle-ready', 
   'toggle-secret-chat',
-  'start-resize' 
+  'start-resize',
+  'start-game'
 ]);
 
-// 处理头像加载失败
+const canStartGame = computed(() => {
+  // 最少需要3名玩家
+  const minPlayers = 3;
+  
+  // 检查是否所有玩家都已准备
+  const allReady = props.users.length === props.readyUsers.length;
+  
+  // 满足以下条件才能开始游戏：
+  // 1. 玩家数量达到最低要求
+  // 2. 所有玩家（包括房主）都已准备
+  return props.users.length >= minPlayers && allReady;
+});
+
 const onAvatarError = (event) => {
-  event.target.src = '/default_avatar.jpg'; // 设置为默认头像
+  event.target.src = '/default_avatar.jpg';
 };
 
 // 注意：原 RoomView 中的 toggleUserList, toggleReady, toggleSecretChat, startResizing
@@ -292,5 +333,52 @@ const onAvatarError = (event) => {
 
 .ready-game-button:hover {
   background-color: #218838;
+}
+
+/* Ready indicator style */
+.ready-badge {
+  background-color: #52c41a; /* Green */
+  color: white;
+  font-size: 0.7rem;
+  padding: 1px 5px;
+  border-radius: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+/* Start Game button style */
+.start-game-button {
+  padding: 12px 0;
+  width: 100%;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.3s;
+  text-align: center;
+  background-color: #1890ff; /* Blue */
+  color: white;
+}
+
+.start-game-button:hover:not(:disabled) {
+  background-color: #40a9ff;
+}
+
+.start-game-button:disabled {
+  background-color: #a0cfff; /* Lighter blue when disabled */
+  cursor: not-allowed;
+}
+
+/* 添加房主按钮容器样式 */
+.host-buttons {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  gap: 10px;
+}
+
+.host-ready-button {
+  margin-top: 8px;
 }
 </style> 

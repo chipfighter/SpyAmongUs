@@ -73,8 +73,10 @@
         @toggle-ready="toggleReady" 
         @toggle-secret-chat="toggleSecretChat"
         @start-resize="handleStartResize"
+        @start-game="handleStartGame"
+        :is-host="isHost"
       />
-      </div>
+                </div>
       <!-- 如果 roomInfo 不存在时显示的消息 -->
       <div v-else class="room-content-loading">
           正在加载房间数据...
@@ -138,8 +140,8 @@ export default {
     ChatInput,
     RoomHeader,
     SecretChatModal,
-    FloatingBall,   // --- 注册新组件 ---
-    MiniChat        // --- 注册新组件 ---
+    FloatingBall,
+    MiniChat        
   },
   setup() {
     const route = useRoute();
@@ -150,7 +152,6 @@ export default {
     const roomStore = useRoomStore(); // --- 获取 roomStore 实例 ---
     
     // --- 将 roomStore 的状态和方法映射到组件中 ---
-    // (注意：这里我们还是返回整个 store 实例，在 Options API 中通过 this 访问)
     // 如果完全使用 Composition API，可以在这里解构或返回需要的 state/actions
     
     return { route, router, userStore, websocketStore, chatStore, roomStore }; // --- 返回 roomStore ---
@@ -231,13 +232,13 @@ export default {
     },
     // Map room store getters
     isHost() {
-      // --- Direct comparison logic --- 
+      // --- Remove Direct Check Logging --- 
       const isHostResult = !!(this.userStore.user?.id && this.roomStore.roomInfo?.host_id && this.userStore.user.id === this.roomStore.roomInfo.host_id);
-      console.log('[RoomView Computed isHost] Direct Check:', { 
+      /* console.log('[RoomView Computed isHost] Direct Check:', { 
           hostId: this.roomStore.roomInfo?.host_id, 
           currentUserId: this.userStore.user?.id, 
           isHostResult 
-      });
+      }); */
       return isHostResult;
     },
     gameNotStarted() {
@@ -313,7 +314,7 @@ export default {
         if (success) {
             alert('已成功退出房间');
             this.router.push('/lobby');
-        } else {
+          } else {
              alert(`退出房间失败: ${this.roomStore.error || '请稍后重试'}`);
         }
     },
@@ -334,8 +335,8 @@ export default {
             })
             .catch(err => {
               console.error('复制失败:', err);
-            });
-          } else {
+              });
+            } else {
           alert('无法复制邀请码');
       }
     },
@@ -460,7 +461,8 @@ export default {
       document.addEventListener('mouseup', handleMouseUp);
     },
     toggleReady() {
-        this.roomStore.toggleReady(); 
+      console.log('[RoomView] toggleReady method called, dispatching to store...');
+      this.roomStore.toggleReady();
     },
     sendMessage() {
       if (!this.newMessage.trim()) return;
@@ -570,6 +572,19 @@ export default {
       
       this.router.push('/lobby?in_room=true');
     },
+    handleStartGame() {
+      console.log('[RoomView] Start game button clicked by host.');
+      // Send message to backend to request game start
+      if (this.websocketStore.isConnected) {
+        this.websocketStore.sendMessage({
+          type: 'start_game',
+          room_id: this.roomInfo.invite_code
+        });
+        // Optionally show a temporary loading/waiting state here?
+            } else {
+        this.roomStore.setError('无法开始游戏：网络连接已断开');
+      }
+    }
   }
 }
 </script>

@@ -389,27 +389,57 @@ class RedisClient:
             return {}
 
     async def get_room_users(self, invite_code: str) -> list[str]:
-        """获取房间中的所有用户ID（按加入顺序）"""
+        """获取房间的所有用户ID列表 (按加入时间排序)"""
         try:
             users_key = ROOM_USERS_KEY_PREFIX % invite_code
-            # 使用zrange按分数(加入时间)排序获取所有用户 (返回 List[str])
-            user_list = await self._redis.zrange(users_key, 0, -1) 
-            return user_list # 直接返回有序列表
+            # 使用 zrange 获取按分数（时间戳）排序的用户
+            users = await self._redis.zrange(users_key, 0, -1)
+            return list(users) if users else []
         except Exception as e:
-            logger.error(f"获取房间用户失败: {str(e)}")
-            return [] # 返回空列表
+            logger.error(f"获取房间用户列表失败: {str(e)}")
+            return []
 
     async def get_room_ready_users(self, invite_code: str) -> Set[str]:
-        """获取房间中已准备的用户ID"""
+        """获取指定房间中所有已准备用户的ID集合"""
         try:
             ready_users_key = ROOM_READY_USERS_KEY_PREFIX % invite_code
-            return set(await self._redis.smembers(ready_users_key))
+            ready_users = await self._redis.smembers(ready_users_key)
+            return ready_users or set() # 确保总是返回一个Set对象
         except Exception as e:
-            logger.error(f"获取房间准备用户失败: {str(e)}")
-            return set()
+            logger.error(f"获取房间 {invite_code} 的准备用户列表失败: {str(e)}")
+            return set() # 失败时返回空集合
+
+    async def is_user_ready(self, invite_code: str, user_id: str) -> bool:
+        """检查指定用户是否在房间的准备集合中。"""
+        try:
+            ready_users_key = ROOM_READY_USERS_KEY_PREFIX % invite_code
+            return await self._redis.sismember(ready_users_key, user_id)
+        except Exception as e:
+            logger.error(f"Redis检查目标用户是否在房间的准备集合失败: (房间: {invite_code}, 用户: {user_id}): {str(e)}")
+            return False
+
+    async def add_user_to_ready_set(self, invite_code: str, user_id: str) -> bool:
+        """将用户添加到房间的准备集合中。"""
+        try:
+            ready_users_key = ROOM_READY_USERS_KEY_PREFIX % invite_code
+            await self._redis.sadd(ready_users_key, user_id)
+            return True
+        except Exception as e:
+            logger.error(f"Redis中将用户添加到房间准备集合中失败: (房间: {invite_code}, 用户: {user_id}): {str(e)}")
+            return False
+
+    async def remove_user_from_ready_set(self, invite_code: str, user_id: str) -> bool:
+        """将用户从房间的准备集合中移除。"""
+        try:
+            ready_users_key = ROOM_READY_USERS_KEY_PREFIX % invite_code
+            await self._redis.srem(ready_users_key, user_id)
+            return True
+        except Exception as e:
+            logger.error(f"Redis中将用户从房间准备集合中移除失败: (房间: {invite_code}, 用户: {user_id}): {str(e)}")
+            return False
 
     async def get_public_rooms(self) -> list:
-        """获取所有公开房间的列表"""
+        """获取所有公开房间的ID列表"""
         try:
             # 获取所有公开房间的邀请码
             public_room_codes = await self._redis.smembers(PUBLIC_ROOMS_KEY)

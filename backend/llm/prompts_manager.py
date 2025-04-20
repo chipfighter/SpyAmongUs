@@ -18,6 +18,7 @@ Notes:
 TODO:
     1.根据游戏流程来设计不同的prompt的组合搭配（每个场景一个对应的字典）
     2.secret_channel提供的function_call操作
+    3.优化prompts结构
 """
 from typing import Dict, List, Any, Optional
 from config import (

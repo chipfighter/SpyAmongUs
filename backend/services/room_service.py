@@ -12,22 +12,20 @@ Notes:
     - data: Optional[Dict]，返回的数据（如果有）
 
 Methods:
-    - 创建、删除房间
-    - 获取公开房间列表
-
-TODO:
-    1.添加用户（普通用户的加入操作）——普通用户加入房间
-    2.删除用户（房主情况需要单独处理，游戏中没法删除用户，必须等到游戏结束）——用户退出房间
+    - 创建、删除房间、加入、退出房间
+    - 获取公开房间列表、获取房间基本信息（不包含用户列表）、获取房间详细信息（包含用户列表）
+    - 用户的准备/取消准备
 """
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Set
 from models.room import Room
 from services.user_service import UserService
 from utils.redis_utils import RedisClient
 from utils.logger_utils import get_logger
 from utils.websocket_manager import WebSocketManager
 from config import (
-    MIN_PLAYERS, MIN_SPY_COUNT, MAX_ROUNDS, MAX_SPEAK_TIME, MAX_LAST_WORDS_TIME, USER_STATUS_ONLINE, USER_STATUS_IN_ROOM
+    MIN_PLAYERS, MIN_SPY_COUNT, MAX_ROUNDS, MAX_SPEAK_TIME, MAX_LAST_WORDS_TIME, USER_STATUS_ONLINE,
+    USER_STATUS_IN_ROOM, GAME_STATUS_WAITING
 )
 import asyncio
 from pydantic import ValidationError
@@ -40,7 +38,6 @@ class RoomService:
         self.user_service = user_service
         self.redis_client = redis_client
         self.websocket_manager = websocket_manager
-        # 初始化message_service为None，稍后设置
         self.message_service = None
         logger.info("房间服务已初始化")
 
@@ -280,7 +277,8 @@ class RoomService:
             if not raw_room_data:
                 logger.error(f"加入房间 {invite_code} 失败：无法获取房间数据")
                 return {"success": False, "message": "房间数据错误"}
-            
+
+            # 校验房间数据
             try:
                 room: Room = Room.model_validate(raw_room_data)
             except ValidationError as e:
@@ -295,7 +293,7 @@ class RoomService:
                     "message": "房间已满"
                 }
 
-            # 4. 将用户添加到房间
+            # 4. 将用户添加到房间（更新房间的redis缓存）
             success = await self.redis_client.update_room_user(invite_code, user_id)
             if not success:
                 return {
@@ -303,34 +301,26 @@ class RoomService:
                     "message": "加入房间失败"
                 }
 
-            # 5. 更新用户状态
+            # 5. 更新用户redis状态
             await self.user_service.update_current_room(user_id, invite_code)
             await self.user_service.update_user_status(user_id, USER_STATUS_IN_ROOM)
-            # 6. 广播用户加入消息给所有用户 (包含最新用户列表)
+            # 6. 广播用户加入消息给所有用户（仅仅广播新用户的info）
             if self.websocket_manager:
-                # 获取最新的用户列表信息
-                all_user_ids = await self.redis_client.get_room_users(invite_code)
-                full_user_list = []
-                for u_id in all_user_ids:
-                    u_info_res = await self.user_service.get_user_info(u_id)
-                    if u_info_res["success"]:
-                        full_user_list.append(u_info_res["data"])
-                    else:
-                        logger.warning(f"广播时无法获取用户 {u_id} 的信息")
-                        full_user_list.append({"id": u_id, "username": f"用户{u_id[:4]}", "avatar_url": "/default_avatar.jpg", "status": "unknown"})
-                
+                username = user_info["data"].get("username")
+                avatar_url = user_info["data"].get("avatar_url")
+
                 await self.websocket_manager.broadcast_message(
-                    room_id=invite_code,
+                    invite_code=invite_code, 
                     message={
                         "type": "user_join",
                         "user_id": user_id,
-                        "username": user_info["data"].get("username", "用户"),
-                        "content": f"用户 {user_info['data'].get('username', '用户')} 加入了房间",
+                        "username": username,
+                        "avatar_url": avatar_url,
+                        "content": f"用户 {username} 加入了房间",
                         "timestamp": int(time.time() * 1000),
-                        "user_list": full_user_list # 添加最新的用户列表
                     },
-                    is_special=False,
-                    target_users=None  # 广播给所有人
+                    is_special=False, 
+                    target_users=None
                 )
 
             return {
@@ -456,41 +446,32 @@ class RoomService:
             await self.user_service.update_user_status(user_id, USER_STATUS_ONLINE)
             logger.info(f"用户 {user_id} 状态已清理：current_room=None, status=online")
 
-            # 7. 发送通知和广播 (获取最新用户列表)
-            current_user_ids = await self.redis_client.get_room_users(invite_code) # 获取移除后的用户列表
-            current_full_user_list = []
-            for u_id in current_user_ids:
-                u_info_res = await self.user_service.get_user_info(u_id)
-                if u_info_res["success"]:
-                    current_full_user_list.append(u_info_res["data"])
-                else:
-                    logger.warning(f"广播时无法获取用户 {u_id} 的信息")
-                    current_full_user_list.append({"id": u_id, "username": f"用户{u_id[:4]}", "avatar_url": "/default_avatar.jpg", "status": "unknown"})
+            # 7. 发送通知和广播
+            # 获取离开用户的用户名
+            leaving_username = former_host_name if is_leaving_host else (await self.user_service.get_user_info(user_id))['data'].get('username', '用户')
             
             # 准备广播内容
             broadcast_message = {
                 "type": "user_leave",
                 "user_id": user_id,
-                "username": former_host_name if is_leaving_host else (await self.user_service.get_user_info(user_id))["data"].get("username", "用户"),
-                "timestamp": int(time.time() * 1000),
-                "user_list": current_full_user_list # 发送最新的用户列表
+                "content": f"用户 {leaving_username} 退出了房间",
+                "timestamp": int(time.time() * 1000)
             }
+            
+            # 如果是房主离开，需要添加新房主ID
             if is_leaving_host:
-                broadcast_message["type"] = "host_leave" # 可以用特定类型区分
+                broadcast_message["type"] = "host_leave"
                 broadcast_message["new_host_id"] = next_host_id
-                broadcast_message["new_host_name"] = new_host_name
                 broadcast_message["content"] = f"{former_host_name} 退出了房间，{new_host_name} 成为新的房主"
-            else:
-                broadcast_message["content"] = f"用户 {broadcast_message['username']} 退出了房间"
 
             # 发送系统消息和广播
             if self.message_service:
                 pass
             if self.websocket_manager:
                 await self.websocket_manager.broadcast_message(
-                    room_id=invite_code,
+                    invite_code=invite_code, 
                     message=broadcast_message,
-                    is_special=False,
+                    is_special=False, 
                     target_users=None
                 )
 
@@ -610,7 +591,7 @@ class RoomService:
             logger.error(f"获取房间 {invite_code} 基础数据时出错: {str(e)}")
             return None
 
-    async def get_room_details(self, invite_code: str) -> Dict[str, Any]:
+    async def get_room_data_users(self, invite_code: str) -> Dict[str, Any]:
         """
         获取指定房间的详细信息
 
@@ -636,21 +617,8 @@ class RoomService:
                     "message": "无法获取房间数据"
                 }
                 
-            # 尝试将Redis数据加载到Pydantic模型以进行验证和类型转换
             try:
-                # --- 移除错误逻辑：不再试图从 room_data 中解析 'users' --- 
-                # if 'users' in room_data and isinstance(room_data['users'], str):
-                #     try:
-                #         # 假设 users 存储为 JSON 字符串列表
-                #         room_data['users'] = json.loads(room_data['users'])
-                #     except json.JSONDecodeError:
-                #         logger.error(f"无法解析房间 {invite_code} 的 users 字段: {room_data['users']}")
-                #         # 可以选择返回错误或设置为空列表
-                #         room_data['users'] = [] 
-                # elif 'users' not in room_data:
-                #      room_data['users'] = [] # 不再需要此处理
-                     
-                # 其他字段类型转换 (示例)
+                # 其他字段类型转换
                 for key in ['total_players', 'spy_count', 'max_rounds', 'speak_time', 'last_words_time']:
                     if key in room_data:
                         try:
@@ -667,24 +635,22 @@ class RoomService:
                 room = Room(**room_data) 
                 room_dict = room.dict() # 使用模型的dict方法确保格式正确
                 
-                # --- 修改：直接从 Redis zSet 获取用户 ID --- 
+                # 直接从 Redis zSet 获取用户 ID
                 user_ids_set = await self.redis_client.get_room_users(invite_code)
                 user_ids = list(user_ids_set) # 转换为列表方便处理
                 
                 # 获取并填充完整的用户信息列表
                 full_user_list = []
-                # --- 现在这里的 user_ids 是正确的了 ---
                 for user_id in user_ids:
                     user_info_result = await self.user_service.get_user_info(user_id)
                     if user_info_result["success"]:
                         # 仅包含基础信息，符合 RoomView 预期
                         full_user_list.append(user_info_result["data"])
                     else:
-                        # 如果获取用户信息失败，可以记录日志，但可能仍需返回一个占位符
+                        # 如果获取用户信息失败，可以记录日志
                         logger.warning(f"无法获取房间 {invite_code} 中用户 {user_id} 的信息")
                         full_user_list.append({"id": user_id, "username": f"用户{user_id[:4]}", "avatar_url": "/default_avatar.jpg", "status": "unknown"})
-                        
-                # 将 users 字段替换为包含完整信息的列表
+
                 room_dict['users'] = full_user_list
 
             except ValidationError as e:
@@ -702,8 +668,7 @@ class RoomService:
                 "success": True,
                 "message": "获取房间详情成功",
                 "data": {
-                    # 保持与 create_room 和 join_room 类似的返回结构
-                    "room_data": room_dict 
+                    "room_data": room_dict
                 }
             }
 
@@ -713,3 +678,65 @@ class RoomService:
                 "success": False,
                 "message": f"获取房间详情时出错: {str(e)}"
             }
+
+    async def toggle_user_ready(self, user_id: str, invite_code: str) -> Dict[str, Any]:
+        """
+        切换用户准备状态
+
+        Args:
+            user_id: 用户ID
+            invite_code: 房间邀请码
+
+        Returns:
+            Dict包含操作结果
+        """
+        try:
+            # 1.检验房间是否存在+房间状态
+            room_data = await self.redis_client.get_room_basic_data(invite_code)
+            if not room_data or room_data.get("status") != GAME_STATUS_WAITING:
+                 message = "房间不存在" if not room_data else f"游戏当前状态为 {room_data.get('status')}，无法更改准备状态"
+                 logger.warning(f"toggle_ready 验证失败 (房间: {invite_code}, 用户: {user_id}): {message}")
+                 return {"success": False, "message": message}
+
+            # 检查用户是否在房间内
+            is_member = await self.redis_client.is_user_in_room(invite_code, user_id)
+            if not is_member:
+                logger.warning(f"toggle_ready 验证失败: 用户 {user_id} 不在房间 {invite_code} 中。")
+                return {"success": False, "message": "您不在此房间内"}
+
+            # 2.修改准备用户集合
+            is_currently_ready = await self.redis_client.is_user_ready(invite_code, user_id)
+
+            new_status: bool
+            if is_currently_ready:
+                # 已准备 -> 取消
+                await self.redis_client.remove_user_from_ready_set(invite_code, user_id)
+                new_status = False
+            else:
+                # 未准备 -> 准备
+                await self.redis_client.add_user_to_ready_set(invite_code, user_id)
+                new_status = True
+
+            # 3.广播websocket信息给该房间内所有用户（与前端接收消息格式对应好）
+            message = {
+                "type": "user_ready",
+                "payload": {
+                    "user_id": user_id,
+                    "is_ready": new_status
+                }
+            }
+
+            if self.websocket_manager:
+                try:
+                    # 确保 message_service 可用且能发送广播
+                    await self.websocket_manager.broadcast_message(invite_code, message, is_special=False)
+                except Exception as ws_err:
+                     logger.error(f"用户准备service中广播失败: (房间: {invite_code}): {ws_err}", exc_info=True)
+            else:
+                logger.warning("用户准备service: WebSocket管理器未配置，无法广播")
+
+            return {"success": True, "message": "准备状态已切换", "data": {"is_ready": new_status}}
+
+        except Exception as e:
+            logger.error(f"toggle_ready 执行出错 (房间: {invite_code}, 用户: {user_id}): {str(e)}", exc_info=True)
+            return {"success": False, "message": "处理准备状态时发生服务器内部错误"}

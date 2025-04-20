@@ -138,20 +138,20 @@ class WebSocketManager:
 
         logger.info(f"房间 {room_id} 的所有连接已关闭，实际关闭连接数: {len(disconnected_users)}")
 
-    async def broadcast_message(self, room_id: str, message: dict, is_special: bool, target_users: set = None) -> None:
+    async def broadcast_message(self, invite_code: str, message: dict, is_special: bool, target_users: set = None) -> None:
         """
-        广播消息到房间
+        广播消息到房间（的指定用户们）
 
         Args:
-            room_id: 房间ID
+            invite_code: 房间ID
             message: 消息内容
             is_special: 消息是否特殊（secret_channel或其他情况）
             target_users: 目标用户集合
 
         Notes:
-            提供给message_service来判断转发
+            提供给message_service以及room_service来转发
         """
-        if room_id not in self.room_connections:
+        if invite_code not in self.room_connections:
             return
 
         # 序列化消息
@@ -161,21 +161,21 @@ class WebSocketManager:
         if is_special:
             # 广播给指定用户集合
             targets = [user_id for user_id in target_users
-                      if user_id in self.room_connections[room_id]]
+                       if user_id in self.room_connections[invite_code]]
         else:
             # 广播给所有用户
-            targets = self.room_connections[room_id].keys()
+            targets = self.room_connections[invite_code].keys()
 
         # 准备所有发送任务
         send_tasks = []
         for user_id in targets:
-            websocket = self.room_connections[room_id].get(user_id)
+            websocket = self.room_connections[invite_code].get(user_id)
             if websocket:
                 # 更新连接状态
-                await self.update_connection_state(room_id, user_id)
+                await self.update_connection_state(invite_code, user_id)
                 # 将每个发送操作添加到任务列表
                 send_tasks.append(self._send_message_to_user(
-                    room_id, user_id, websocket, message_text))
+                    invite_code, user_id, websocket, message_text))
 
         # 并行执行所有发送任务
         if send_tasks:

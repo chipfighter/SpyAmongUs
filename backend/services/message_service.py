@@ -235,32 +235,24 @@ class MessageService:
 
             # 广播消息到房间
             logger.info(f"广播消息到房间 {room_id}")
-            await self.websocket_manager.broadcast_message(
-                room_id=room_id,
-                message={
-                    "type": "chat",  # 明确指定消息类型
-                    "user_id": user_id,
-                    "username": username,  # 使用username而不是username
-                    "content": content,
-                    "timestamp": int(time.time() * 1000),
-                },
-                is_special=False  # 普通消息不是特殊消息
-            )
+            await self.websocket_manager.broadcast_message(invite_code=room_id, message={
+                "type": "chat",  # 明确指定消息类型
+                "user_id": user_id,
+                "username": username,  # 使用username而不是username
+                "content": content,
+                "timestamp": int(time.time() * 1000),
+            }, is_special=False)
             logger.info("消息广播成功")
 
         except Exception as e:
             logger.error(f"处理普通消息失败: {str(e)}")
             # 尝试发送错误消息到前端
             try:
-                await self.websocket_manager.broadcast_message(
-                    room_id=room_id,
-                    message={
-                        "type": "error",  # 明确指定错误消息类型
-                        "message": f"处理消息失败: {str(e)}",
-                        "timestamp": int(time.time() * 1000)
-                    },
-                    is_special=False  # 错误消息也不是特殊消息
-                )
+                await self.websocket_manager.broadcast_message(invite_code=room_id, message={
+                    "type": "error",  # 明确指定错误消息类型
+                    "message": f"处理消息失败: {str(e)}",
+                    "timestamp": int(time.time() * 1000)
+                }, is_special=False)
             except Exception as broadcast_error:
                 logger.error(f"发送错误消息失败: {str(broadcast_error)}")
 
@@ -282,22 +274,18 @@ class MessageService:
                 username = user_info.get("username", message_data.get("username", "Unknown"))
                 
                 # 广播原始消息
-                await self.websocket_manager.broadcast_message(
-                    room_id=room_id,
-                    message={
-                        "type": "chat",
-                        "user_id": user_id,
-                        "username": username,
-                        "content": message_data.get("content", ""),
-                        "timestamp": timestamp,
-                        "is_system": False,
-                        "round": "0",
-                        "mentions": message_data.get("mentions", []),
-                        "ai_type": message_data.get("ai_type"),
-                        "room_id": room_id
-                    },
-                    is_special=False
-                )
+                await self.websocket_manager.broadcast_message(invite_code=room_id, message={
+                    "type": "chat",
+                    "user_id": user_id,
+                    "username": username,
+                    "content": message_data.get("content", ""),
+                    "timestamp": timestamp,
+                    "is_system": False,
+                    "round": "0",
+                    "mentions": message_data.get("mentions", []),
+                    "ai_type": message_data.get("ai_type"),
+                    "room_id": room_id
+                }, is_special=False)
                 logger.info("已广播用户原始消息")
             except Exception as e:
                 logger.error(f"广播用户原始消息失败: {str(e)}")
@@ -365,11 +353,8 @@ class MessageService:
                 }
                 
                 # 广播到房间
-                await self.websocket_manager.broadcast_message(
-                    room_id=room_id,
-                    message=stream_message,
-                    is_special=False
-                )
+                await self.websocket_manager.broadcast_message(invite_code=room_id, message=stream_message,
+                                                               is_special=False)
                 
                 # 更新第一个块标志
                 if is_first_chunk:
@@ -386,11 +371,7 @@ class MessageService:
                 "session_id": session_id  # 使用同一个会话ID
             }
             
-            await self.websocket_manager.broadcast_message(
-                room_id=room_id,
-                message=end_message,
-                is_special=False
-            )
+            await self.websocket_manager.broadcast_message(invite_code=room_id, message=end_message, is_special=False)
             
             # LLM处理完后，将用户消息和AI响应一起存储到Redis
             pipe = await self.redis_client.pipeline()
@@ -428,15 +409,11 @@ class MessageService:
         except Exception as e:
             logger.error(f"处理AI消息失败: {str(e)}")
             # 发送错误消息到前端
-            await self.websocket_manager.broadcast_message(
-                room_id=room_id,
-                message={
-                    "type": "error",
-                    "message": f"AI处理失败: {str(e)}",
-                    "timestamp": int(time.time() * 1000)
-                },
-                is_special=False  # 错误消息不是特殊消息
-            )
+            await self.websocket_manager.broadcast_message(invite_code=room_id, message={
+                "type": "error",
+                "message": f"AI处理失败: {str(e)}",
+                "timestamp": int(time.time() * 1000)
+            }, is_special=False)
 
     async def _stream_ai_response_to_frontend(self, room_id: str, chunk: str, is_start: bool, is_end: bool) -> None:
         """
@@ -466,11 +443,8 @@ class MessageService:
             }
 
             # 广播到房间
-            await self.websocket_manager.broadcast_message(
-                room_id=room_id,
-                message=stream_message,
-                is_special=False  # AI流式响应不是特殊消息
-            )
+            await self.websocket_manager.broadcast_message(invite_code=room_id, message=stream_message,
+                                                           is_special=False)
         except Exception as e:
             logger.error(f"流式传输AI响应失败: {str(e)}")
 
@@ -624,12 +598,9 @@ class MessageService:
             
             # 广播到指定用户
             message_dict = message.dict()
-            await self.websocket_manager.broadcast_message(
-                room_id=room_id,
-                message={**message_dict, "type": "secret"},  # 添加类型标识
-                is_special=True,
-                target_users=set(target_users)
-            )
+            await self.websocket_manager.broadcast_message(invite_code=room_id,
+                                                           message={**message_dict, "type": "secret"}, is_special=True,
+                                                           target_users=set(target_users))
             
             return {
                 "success": True,
@@ -680,12 +651,8 @@ class MessageService:
             message_dict = message.dict()
             message_dict["type"] = "system"  # 添加类型标识
             
-            await self.websocket_manager.broadcast_message(
-                room_id=room_id,
-                message=message_dict,
-                is_special=False,   # 默认广播全部用户
-                target_users=target_users
-            )
+            await self.websocket_manager.broadcast_message(invite_code=room_id, message=message_dict, is_special=False,
+                                                           target_users=target_users)
             
             return {
                 "success": True,

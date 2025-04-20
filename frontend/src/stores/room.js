@@ -3,7 +3,7 @@ import { useUserStore } from './userStore'
 import { useWebsocketStore } from './websocket'
 import { useChatStore } from './chat'
 
-// 初始状态工厂函数，方便重置
+// 初始状态工厂函数
 const getDefaultState = () => ({
   roomInfo: {
     name: null,
@@ -34,7 +34,6 @@ export const useRoomStore = defineStore('room', {
       const chatStore = useChatStore();
 
       try {
-        // --- 添加日志：检查 token --- 
         console.log('[RoomStore] Token being used for fetchRoomDetails:', userStore.accessToken); 
         
         const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/${roomId}`, {
@@ -56,13 +55,11 @@ export const useRoomStore = defineStore('room', {
             total_players: roomData.total_players || 8,
           };
           this.users = roomData.users || [];
-          // --- Add logs to verify state update ---
           console.log('[RoomStore] State updated after fetch:');
           console.log('[RoomStore] this.roomInfo:', JSON.stringify(this.roomInfo));
           console.log('[RoomStore] this.users:', JSON.stringify(this.users));
-          // ---------------------------------------
           this.isLoading = false;
-          return true; // Indicate success
+          return true;
         } else {
           throw new Error(result.message || '获取房间信息失败');
         }
@@ -70,7 +67,7 @@ export const useRoomStore = defineStore('room', {
         console.error('[RoomStore] Fetch room details failed:', error);
         this.error = error.message;
         this.isLoading = false;
-        return false; // Indicate failure
+        return false;
       }
     },
     async leaveRoom() {
@@ -81,6 +78,7 @@ export const useRoomStore = defineStore('room', {
         this.error = null;
         const userStore = useUserStore();
         const websocketStore = useWebsocketStore();
+        const chatStore = useChatStore();
 
         try {
             const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/${this.roomInfo.invite_code}/leave_room`, {
@@ -93,10 +91,11 @@ export const useRoomStore = defineStore('room', {
             const result = await response.json();
             if (result.success) {
                 console.log('[RoomStore] Left room successfully');
-                websocketStore.disconnect(); // Disconnect WebSocket
-                this.clearRoomState(); // Clear local state
+                websocketStore.disconnect();
+                chatStore.clearMessages();
+                this.clearRoomState();
                 this.isLoading = false;
-                return true; // Indicate success for routing
+                return true;
             } else {
                 throw new Error(result.message || '退出房间失败');
             }
@@ -104,26 +103,20 @@ export const useRoomStore = defineStore('room', {
             console.error('[RoomStore] Leave room failed:', error);
             this.error = error.message;
             this.isLoading = false;
-            return false; // Indicate failure
+            return false;
         }
     },
     async disbandRoom() {
-        // --- Add Pre-Check Logging ---
         const userStoreForCheck = useUserStore();
         const hostId = this.roomInfo?.host_id;
         const currentUserId = userStoreForCheck.user?.id;
         const isHostCheck = hostId === currentUserId;
         console.log(`[RoomStore Pre-Disband Check] Invite Code: ${this.roomInfo?.invite_code}, Host ID: ${hostId}, Current User ID: ${currentUserId}, Is Host: ${isHostCheck}`);
-        // -----------------------------
 
-        // --- Original Guard Condition --- 
         if (!this.roomInfo?.invite_code || !isHostCheck) { 
             console.warn('[RoomStore Disband] Guard condition failed or user is not host.');
-            // Optionally set error message here if needed
-            // this.setError('无法解散房间：不是房主或房间信息错误');
             return false; 
         }
-        // -----------------------------
 
         console.log(`[RoomStore] Disbanding room ${this.roomInfo.invite_code}`);
         this.isLoading = true;
@@ -131,13 +124,11 @@ export const useRoomStore = defineStore('room', {
         this.error = null;
         const userStore = useUserStore();
         const websocketStore = useWebsocketStore();
+        const chatStore = useChatStore();
 
         try {
-            // --- Add Pre-Fetch Logging ---
             const apiUrl = `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/${this.roomInfo.invite_code}/delete_room`;
             const accessToken = userStore.accessToken;
-            console.log(`[RoomStore Pre-Fetch] URL: ${apiUrl}, Token Exists: ${!!accessToken}`);
-            // -----------------------------
 
             const response = await fetch(apiUrl, {
                 method: 'POST', 
@@ -146,29 +137,24 @@ export const useRoomStore = defineStore('room', {
                 'Authorization': `Bearer ${accessToken}`
                 }
             });
-            
-            // --- Add Post-Fetch Logging ---
-            console.log(`[RoomStore Post-Fetch] Response status: ${response.status}`);
-            // -----------------------------
 
             const result = await response.json();
              if (result.success) {
                 console.log('[RoomStore] Disbanded room successfully');
-                websocketStore.disconnect(); // Disconnect WebSocket
-                this.clearRoomState(); // Clear local state
+                websocketStore.disconnect();
+                chatStore.clearMessages();
+                this.clearRoomState();
                 this.isLoading = false;
-                return true; // Indicate success for routing
+                return true;
             } else {
                 throw new Error(result.message || '解散房间失败');
             }
         } catch (error) {
             console.error('[RoomStore] Disband room failed:', error);
-            // --- Log the full error object --- 
             console.error('[RoomStore] Full error object:', error); 
-            // ------------------------------------
             this.error = error.message;
             this.isLoading = false;
-            return false; // Indicate failure
+            return false;
         }
     },
 
@@ -179,7 +165,6 @@ export const useRoomStore = defineStore('room', {
     },
     updateUserList(users) {
       console.log('[RoomStore] Updating user list:', users);
-      // --- Add detailed logging ---
       if (Array.isArray(users)) {
         console.log(`[RoomStore] Received ${users.length} users. Details:`);
         users.forEach((user, index) => {
@@ -188,8 +173,46 @@ export const useRoomStore = defineStore('room', {
       } else {
         console.warn('[RoomStore] Received non-array data for user list:', users);
       }
-      // --- End detailed logging ---
       this.users = users || [];
+    },
+    async updateUserListByIds(userIds) {
+      if (!Array.isArray(userIds) || userIds.length === 0) {
+        console.warn('[RoomStore] Invalid or empty user IDs received:', userIds);
+        return;
+      }
+      
+      console.log(`[RoomStore] Updating user list by IDs: ${userIds.length} users`);
+      
+      // 如果房间已有用户列表，先尝试用本地数据更新
+      const localUpdatedList = [];
+      const missingIds = [];
+      
+      // 首先从现有列表中找匹配的用户
+      for (const userId of userIds) {
+        const existingUser = this.users.find(u => u.id === userId);
+        if (existingUser) {
+          localUpdatedList.push(existingUser);
+        } else {
+          missingIds.push(userId);
+        }
+      }
+      
+      // 如果没有缺失的用户ID，直接更新
+      if (missingIds.length === 0) {
+        console.log('[RoomStore] Updated user list using local data');
+        this.users = localUpdatedList;
+        return;
+      }
+      
+      // 如果有缺失的用户ID，需要重新获取完整房间信息
+      if (this.roomInfo?.invite_code) {
+        console.log(`[RoomStore] Fetching room details due to missing user data: ${missingIds.length} unknown users`);
+        await this.fetchRoomDetails(this.roomInfo.invite_code);
+      } else {
+        console.warn('[RoomStore] Cannot fetch missing user info: Missing invite_code');
+        // 仍然使用部分更新的列表
+        this.users = localUpdatedList;
+      }
     },
     setHost(newHostId) {
       console.log(`[RoomStore] Setting new host: ${newHostId}`);
@@ -197,27 +220,64 @@ export const useRoomStore = defineStore('room', {
            this.roomInfo.host_id = newHostId;
        }
     },
-    updateReadyStatus(payload) {
-        console.log('[RoomStore] Updating ready status:', payload);
-        const { user_id, is_ready } = payload;
-        const userStore = useUserStore();
-        
-        if (user_id === userStore.currentUser?.id) {
-            this.isCurrentUserReady = is_ready;
-        }
-        
-        const index = this.readyUsers.indexOf(user_id);
-        if (is_ready && index === -1) {
-            this.readyUsers.push(user_id);
-        } else if (!is_ready && index !== -1) {
-            this.readyUsers.splice(index, 1);
-        }
+    addUser(newUser) {
+      // 避免重复添加同一用户
+      if (!this.users.some(user => user.id === newUser.id)) {
+        this.users = [...this.users, newUser];
+        console.log(`[RoomStore] Added user to list: ${newUser.username}`);
+      }
+    },
+    removeUser(userId) {
+      const userToRemove = this.users.find(user => user.id === userId);
+      if (userToRemove) {
+        console.log(`[RoomStore] Removing user from list: ${userToRemove.username}`);
+        this.users = this.users.filter(user => user.id !== userId);
+      }
+    },
+    updateReadyStatus(payload) { 
+      console.log('[RoomStore] Handling user_ready_update message:', payload);
+
+      // 直接从payload中获取数据，适应后端格式
+      let user_id, is_ready;
+
+      // 处理后端发来的标准格式: {type: "user_ready", payload: {user_id: "xxx", is_ready: true/false}}
+      if (payload.payload && typeof payload.payload.user_id !== 'undefined' && typeof payload.payload.is_ready !== 'undefined') {
+        user_id = payload.payload.user_id;
+        is_ready = payload.payload.is_ready;
+      } else {
+        console.warn('[RoomStore] 无法识别的准备状态更新格式:', payload);
+        return;
+      }
+      
+      const userStore = useUserStore();
+
+      // 更新readyUsers集合，不管是当前用户还是其他用户
+      const currentReadyUsers = new Set(this.readyUsers);
+      if (is_ready) {
+          if (!currentReadyUsers.has(user_id)) {
+               currentReadyUsers.add(user_id);
+               console.log(`[RoomStore] Added ${user_id} to readyUsers Set.`);
+          }
+      } else {
+          if (currentReadyUsers.has(user_id)) {
+               currentReadyUsers.delete(user_id);
+               console.log(`[RoomStore] Removed ${user_id} from readyUsers Set.`);
+          }
+      }
+      this.readyUsers = Array.from(currentReadyUsers);
+
+      // 仅当是当前用户时才更新isCurrentUserReady状态
+      if (user_id === userStore.user?.id) {
+          this.isCurrentUserReady = !!is_ready;
+          console.log(`[RoomStore] Updated isCurrentUserReady to: ${this.isCurrentUserReady}`);
+      }
+
+      console.log('[RoomStore] readyUsers state after update:', JSON.stringify(this.readyUsers));
     },
     setGameStatus(started) {
         console.log(`[RoomStore] Setting game status to: ${started}`);
       this.gameStarted = started;
       if (!started) {
-        // Reset ready status on game end
         this.readyUsers = [];
         this.isCurrentUserReady = false;
       }
@@ -225,48 +285,80 @@ export const useRoomStore = defineStore('room', {
 
     // --- Component Actions ---
     async toggleReady() {
-        const userStore = useUserStore();
-        const websocketStore = useWebsocketStore();
-        if (!websocketStore.isConnected || !userStore.currentUser?.id || !this.roomInfo.invite_code) {
-            console.warn('[RoomStore] Cannot toggle ready: Not connected or user/room info missing');
-            return;
+      if (!this.roomInfo?.invite_code) {
+        console.error('[RoomStore] toggleReady: Missing invite_code');
+        this.setError('无法切换准备状态：房间信息不完整');
+        return;
+      }
+
+      const userStore = useUserStore();
+      const inviteCode = this.roomInfo.invite_code;
+      const apiUrl = `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/room/${inviteCode}/ready`;
+      const accessToken = userStore.accessToken;
+
+      if (!accessToken) {
+        console.error('[RoomStore] toggleReady: Missing access token');
+        this.setError('无法切换准备状态：用户未登录');
+        return;
+      }
+
+      console.log(`[RoomStore] Calling toggleReady API for room ${inviteCode}`);
+      this.setError(null); 
+
+      try {
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+          },
+        });
+
+        if (!response.ok) {
+          let errorMessage = '切换准备状态失败';
+          try {
+            const errorResult = await response.json();
+            errorMessage = errorResult.detail || errorResult.message || errorMessage;
+          } catch (parseError) {
+            errorMessage = `请求失败，状态码: ${response.status}`;
+          }
+          throw new Error(errorMessage);
         }
-        
-        const newReadyState = !this.isCurrentUserReady;
-        console.log(`[RoomStore] Toggling ready state for user ${userStore.currentUser.id} to ${newReadyState}`);
-        
-        // Optimistically update UI
-        this.isCurrentUserReady = newReadyState;
-        const userId = userStore.currentUser.id;
-        const index = this.readyUsers.indexOf(userId);
-        if (newReadyState && index === -1) {
-            this.readyUsers.push(userId);
-        } else if (!newReadyState && index !== -1) {
-            this.readyUsers.splice(index, 1);
+
+        // 解析响应结果
+        const result = await response.json();
+        console.log(`[RoomStore] toggleReady API call successful:`, result);
+
+        // 立即更新本地状态 (WebSocket更新可能有延迟)
+        if (result.success && result.data && typeof result.data.is_ready === 'boolean') {
+          const myUserId = userStore.user?.id;
+          // 更新当前用户的准备状态
+          this.isCurrentUserReady = result.data.is_ready;
+          
+          // 更新readyUsers数组
+          const currentReadyUsers = new Set(this.readyUsers);
+          if (result.data.is_ready) {
+            if (!currentReadyUsers.has(myUserId)) {
+              currentReadyUsers.add(myUserId);
+            }
+          } else {
+            if (currentReadyUsers.has(myUserId)) {
+              currentReadyUsers.delete(myUserId);
+            }
+          }
+          this.readyUsers = Array.from(currentReadyUsers);
+          
+          console.log(`[RoomStore] 本地更新准备状态: ${result.data.is_ready}`);
+          console.log(`[RoomStore] 当前准备用户: ${JSON.stringify(this.readyUsers)}`);
         }
-        
-        // Send update to backend
-        const readyMessage = {
-           type: 'ready_status',
-           user_id: userId,
-           is_ready: newReadyState,
-           room_id: this.roomInfo.invite_code
-         };
-        if (!websocketStore.sendMessage(readyMessage)) {
-             console.error('[RoomStore] Failed to send ready status update');
-             // Revert optimistic update on failure?
-             this.isCurrentUserReady = !newReadyState;
-             const revertIndex = this.readyUsers.indexOf(userId);
-             if (newReadyState && revertIndex !== -1) this.readyUsers.splice(revertIndex, 1);
-             if (!newReadyState && revertIndex === -1) this.readyUsers.push(userId);
-             this.setError('发送准备状态失败');
-        }
+
+      } catch (error) {
+        console.error('[RoomStore] toggleReady API call failed:', error);
+        this.setError(error.message);
+      }
     },
     setError(message) {
       console.error('[RoomStore] Error set:', message);
       this.error = message;
-      // Optionally clear error after some time
-      // setTimeout(() => { this.error = null; }, 5000);
     },
     clearError() {
         console.log('[RoomStore] Clearing error');
@@ -276,8 +368,6 @@ export const useRoomStore = defineStore('room', {
     clearRoomState() {
       console.log('[RoomStore] Clearing room state');
       Object.assign(this, getDefaultState());
-      // Also clear related stores?
-      // useChatStore().clearMessages(); 
     },
   },
   getters: {

@@ -1,5 +1,5 @@
 """
-谁是卧底多人聊天系统v0.0.7
+谁是卧底多人聊天系统v0.0.8
 
 Description:
     提供给前端的API接口层、系统全局监测、websocket全局管理
@@ -19,6 +19,7 @@ Note:
 
 import time
 import json
+import asyncio
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -721,7 +722,7 @@ async def get_room_details(invite_code: str):
     """获取房间详细信息API"""
     try:
         # 调用RoomService获取房间详情
-        result = await room_service.get_room_details(invite_code)
+        result = await room_service.get_room_data_users(invite_code)
         
         if not result["success"]:
             # 根据错误消息决定状态码
@@ -841,6 +842,23 @@ async def leave_room(invite_code: str, request: Request):
     except Exception as e:
         logger.error(f"退出房间失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/room/{invite_code}/ready")
+async def update_ready_status(invite_code: str, request: Request):
+    """切换用户在指定房间的准备状态"""
+    # 从中间件设置的 request state 获取对应的 user_id
+    user_id = request.state.user_id
+    logger.debug(f"用户 {user_id} 尝试切换房间 {invite_code} 的准备状态")
+
+    # 调用 RoomService 中的方法
+    result = await room_service.toggle_user_ready(user_id, invite_code)
+
+    if result["success"]:
+        logger.info(f"用户 {user_id} 在房间 {invite_code} 切换准备状态成功")
+        return JSONResponse(status_code=200, content=result)
+    else:
+        logger.warning(f"用户 {user_id} 在房间 {invite_code} 切换准备状态失败: {result['message']}")
+        raise HTTPException(status_code=400, detail=result["message"])
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, reload=DEBUG)
