@@ -35,7 +35,7 @@
     <main class="lobby-content">
       <div class="section-header">
         <h2 class="section-title">游戏大厅</h2>
-        <button class="refresh-btn" title="刷新房间列表" @click="refreshRooms">
+        <button class="refresh-btn" :class="{ 'refreshing': isRefreshing }" title="刷新房间列表" @click="refreshRooms">
           <span class="refresh-icon">↻</span>
         </button>
       </div>
@@ -262,6 +262,7 @@ const joinFormError = ref('')
 // 房间列表相关
 const publicRooms = ref([])
 const isLoading = ref(true)
+const isRefreshing = ref(false)
 
 // 悬浮球相关
 const showFloatingBall = ref(false)
@@ -284,6 +285,9 @@ const isConnectingWebSocket = ref(false)
 const webSocketConnectionError = ref(null) // Store WebSocket connection error
 // ------------------------------------
 
+// 在顶部变量声明部分添加
+const autoRefreshInterval = ref(null);
+
 onMounted(async () => {
   // 初始化用户数据
   userStore.initStore()
@@ -292,6 +296,9 @@ onMounted(async () => {
   if (!userStore.isAuthenticated) {
     router.push('/login')
   } else {
+    // 检查路由参数，如果是从房间退出回来的，立即刷新
+    const fromRoom = route.query.from_room === 'true'
+    
     // 加载公开房间列表
     await refreshRooms()
     
@@ -299,6 +306,21 @@ onMounted(async () => {
     checkActiveRoom()
     // 添加全局点击监听器以关闭上下文菜单
     document.addEventListener('click', handleClickOutsideMenu)
+    
+    // 启动自动刷新
+    startAutoRefresh()
+    
+    // 添加页面可见性变化监听
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    
+    // 添加路由变化监听，用于检测用户从房间返回大厅
+    router.afterEach((to, from) => {
+      // 如果是导航到大厅页面
+      if (to.name === 'lobby' || to.path === '/') {
+        console.log('[LobbyView] 检测到路由变化，返回大厅，立即刷新')
+        refreshRooms() // 立即刷新房间列表
+      }
+    })
   }
 })
 
@@ -308,10 +330,16 @@ onBeforeUnmount(() => {
   document.removeEventListener('mouseup', stopDragBall)
   // 移除全局点击监听器
   document.removeEventListener('click', handleClickOutsideMenu)
+  
+  // 停止自动刷新并移除页面可见性监听
+  stopAutoRefresh()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 
 async function refreshRooms() {
   isLoading.value = true
+  isRefreshing.value = true
+  
   try {
     // 调用API获取公开房间列表
     const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/rooms/refresh_public_room`, {
@@ -337,6 +365,10 @@ async function refreshRooms() {
     publicRooms.value = []
   } finally {
     isLoading.value = false
+    
+    setTimeout(() => {
+      isRefreshing.value = false
+    }, 800)
   }
 }
 
@@ -812,6 +844,41 @@ watch(webSocketConnectionError, (newError) => {
       // setTimeout(() => { webSocketConnectionError.value = null; }, 5000);
   }
 });
+
+// 添加自动刷新相关方法
+function startAutoRefresh() {
+  // 清除可能存在的旧计时器
+  stopAutoRefresh()
+  
+  // 只有在页面可见时才启动自动刷新
+  if (document.visibilityState === 'visible') {
+    console.log('[LobbyView] 启动自动刷新，间隔15秒')
+    autoRefreshInterval.value = setInterval(() => {
+      console.log('[LobbyView] 执行自动刷新')
+      refreshRooms() // 调用刷新函数，会触发动画效果
+    }, 15000) // 15秒
+  }
+}
+
+function stopAutoRefresh() {
+  if (autoRefreshInterval.value) {
+    console.log('[LobbyView] 停止自动刷新')
+    clearInterval(autoRefreshInterval.value)
+    autoRefreshInterval.value = null
+  }
+}
+
+// 处理页面可见性变化
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    console.log('[LobbyView] 页面变为可见，立即刷新并启动自动刷新')
+    refreshRooms() // 页面变为可见时立即刷新一次
+    startAutoRefresh() // 然后启动自动刷新
+  } else {
+    console.log('[LobbyView] 页面变为不可见，停止自动刷新')
+    stopAutoRefresh() // 页面不可见时停止自动刷新
+  }
+}
 </script>
 
 <style scoped>
@@ -1020,7 +1087,7 @@ watch(webSocketConnectionError, (newError) => {
   100% { transform: rotate(360deg); }
 }
 
-.refresh-btn.loading .refresh-icon {
+.refresh-btn.refreshing .refresh-icon {
   animation: spin 1s linear infinite;
 }
 
