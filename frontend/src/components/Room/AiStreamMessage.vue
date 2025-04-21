@@ -8,9 +8,16 @@
     <div class="message-content">
       <div class="username">AI助理</div>
       <div class="text">
-        <span v-html="formattedContent"></span>
-        <!-- 只在流式输出时显示打字光标 -->
-        <span v-if="isStreaming" class="cursor"></span>
+        <!-- 当内容为空且正在streaming时显示加载动画 -->
+        <div v-if="isStreaming && !processedContent" class="loading-dots">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
+        <!-- 否则显示内容 -->
+        <span v-else v-html="formattedContent"></span>
+        <!-- 只在流式输出且有内容时显示打字光标 -->
+        <span v-if="isStreaming && processedContent" class="cursor"></span>
       </div>
       <div class="message-time">{{ formatTime }}</div>
     </div>
@@ -150,6 +157,7 @@ export default {
   word-break: break-all;
   line-height: 1.4;
   position: relative;
+  min-height: 20px; /* 确保即使内容为空也有高度 */
 }
 
 .message-time {
@@ -172,5 +180,35 @@ export default {
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
+}
+
+/* 三点加载动画 */
+.loading-dots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #666;
+  margin: 0 3px;
+  animation: bounce 1.4s infinite ease-in-out both;
+}
+
+.dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+@keyframes bounce {
+  0%, 80%, 100% { transform: scale(0); }
+  40% { transform: scale(1); }
 }
 </style>

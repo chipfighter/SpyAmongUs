@@ -27,6 +27,7 @@ from utils.message_queue_manager import MessageQueueManager
 from utils.ai_lock_manager import AIStorageLockManager
 import uuid
 import re
+import asyncio
 
 logger = get_logger(__name__)
 
@@ -186,25 +187,42 @@ class MessageService:
             else:
                 # 检查是否有AI处理正在进行
                 is_locked = await self.ai_storage_lock_manager.is_storage_locked(room_id)
+                
+                # 立即获取用户信息准备广播
+                user_info = await self.redis_client.hgetall(f"user:{user_id}")
+                username = user_info.get("username", message_data.get("username", "Unknown"))
+                content = message_data.get("content", "")
+                
+                # 不管是否有AI锁，都先广播消息到前端
+                timestamp = int(time.time() * 1000)
+                await self.websocket_manager.broadcast_message(invite_code=room_id, message={
+                    "type": "chat",
+                    "user_id": user_id,
+                    "username": username,
+                    "content": content,
+                    "timestamp": timestamp,
+                }, is_special=False)
+                logger.info(f"已广播用户消息到房间 {room_id}")
+                
                 if is_locked:
-                    # AI处理正在进行，将普通消息添加到待处理队列
-                    logger.info(f"房间 {room_id} 的AI存储锁被占用，将普通消息添加到待处理队列")
+                    # AI处理正在进行，将普通消息添加到待处理队列（仅为了保证存储顺序是时效性的）
+                    logger.info(f"房间 {room_id} 的AI存储锁被占用，将普通消息添加到待处理队列（仅影响存储顺序，消息已广播）")
                     await self.ai_storage_lock_manager.add_pending_message(room_id, {
                         "type": "normal",
                         "message_data": message_data,
                         "user_id": user_id
                     })
                 else:
-                    # 普通消息直接处理
-                    logger.info("检测到普通消息，直接处理")
-                    await self._handle_normal_message(room_id, message_data, user_id)
+                    # 普通消息直接处理（存储到Redis）
+                    logger.info("检测到普通消息且无AI锁，直接处理并存储")
+                    await self._handle_normal_message(room_id, message_data, user_id, skip_broadcast=True)  # 跳过广播，因为已经广播过了
 
         except Exception as e:
             logger.error(f"处理Redis队列消息失败: {str(e)}")
 
 
     # 普通消息处理
-    async def _handle_normal_message(self, room_id: str, message_data: dict, user_id: str):
+    async def _handle_normal_message(self, room_id: str, message_data: dict, user_id: str, skip_broadcast: bool = False):
         """处理普通消息"""
         try:
             logger.info(f"处理普通消息: {message_data}")
@@ -233,16 +251,19 @@ class MessageService:
             logger.info("执行Redis pipeline")
             await pipe.execute()
 
-            # 广播消息到房间
-            logger.info(f"广播消息到房间 {room_id}")
-            await self.websocket_manager.broadcast_message(invite_code=room_id, message={
-                "type": "chat",  # 明确指定消息类型
-                "user_id": user_id,
-                "username": username,  # 使用username而不是username
-                "content": content,
-                "timestamp": int(time.time() * 1000),
-            }, is_special=False)
-            logger.info("消息广播成功")
+            # 广播消息到房间（如果skip_broadcast为True则跳过）
+            if not skip_broadcast:
+                logger.info(f"广播消息到房间 {room_id}")
+                await self.websocket_manager.broadcast_message(invite_code=room_id, message={
+                    "type": "chat",  # 明确指定消息类型
+                    "user_id": user_id,
+                    "username": username,  # 使用username而不是username
+                    "content": content,
+                    "timestamp": int(time.time() * 1000),
+                }, is_special=False)
+                logger.info("消息广播成功")
+            else:
+                logger.info(f"跳过广播到房间 {room_id}，消息已在队列处理前广播")
 
         except Exception as e:
             logger.error(f"处理普通消息失败: {str(e)}")
@@ -287,8 +308,20 @@ class MessageService:
                     "room_id": room_id
                 }, is_special=False)
                 logger.info("已广播用户原始消息")
+                
+                # 广播流式消息的预先消息，前端可以立即显示AI气泡和加载动画
+                await self.websocket_manager.broadcast_message(invite_code=room_id, message={
+                    "type": "ai_stream",
+                    "is_start": True,
+                    "is_end": False,
+                    "content": "",  # 内容为空，前端会显示加载动画
+                    "timestamp": timestamp + 1,  # 使用稍后的时间戳确保排序正确
+                    "session_id": session_id
+                }, is_special=False)
+                logger.info("已广播AI准备状态，前端将显示加载动画")
+                
             except Exception as e:
-                logger.error(f"广播用户原始消息失败: {str(e)}")
+                logger.error(f"广播用户原始消息或AI准备状态失败: {str(e)}")
             
             # 获取聊天历史
             chat_history_dicts = await self.get_room_messages(room_id)
@@ -346,7 +379,7 @@ class MessageService:
                 stream_message = {
                     "timestamp": chunk_timestamp,
                     "type": "ai_stream",
-                    "is_start": is_first_chunk,
+                    "is_start": False,  # 修改为False，因为我们已经提前发送了开始消息
                     "is_end": False,
                     "content": processed_chunk,
                     "session_id": session_id  # 使用会话ID保持消息关联
@@ -355,6 +388,9 @@ class MessageService:
                 # 广播到房间
                 await self.websocket_manager.broadcast_message(invite_code=room_id, message=stream_message,
                                                                is_special=False)
+                
+                # 主动让出控制权给事件循环，允许其他任务（如广播普通消息）运行
+                await asyncio.sleep(0)
                 
                 # 更新第一个块标志
                 if is_first_chunk:
@@ -501,8 +537,9 @@ class MessageService:
                 return
 
             if message_type == "normal":
-                # 处理普通消息
-                await self._handle_normal_message(room_id, message_data, user_id)
+                # 处理普通消息，但跳过广播（因为在添加到待处理队列前已经广播过了）
+                logger.info(f"处理待处理的普通消息: {message_data}")
+                await self._handle_normal_message(room_id, message_data, user_id, skip_broadcast=True)
 
             if message_type == "ai_mention":
                 logger.info(f"重新将AI消息添加到Redis队列: {message_data}")
