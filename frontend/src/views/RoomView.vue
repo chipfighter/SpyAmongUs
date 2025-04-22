@@ -82,7 +82,6 @@
         @toggle-ready="toggleReady" 
         @toggle-secret-chat="toggleSecretChat"
         @start-resize="handleStartResize"
-        @start-game="handleStartGame"
         @add-friend="handleAddFriend"
         @view-user-details="handleViewUserDetails"
         @private-message="handlePrivateMessage" 
@@ -110,6 +109,9 @@
       @send-message="sendSecretMessage"
       @toggle-target="toggleTargetUser" 
     />
+
+    <!-- 倒计时动画组件 -->
+    <CountdownOverlay ref="countdownOverlay" @cancel-ready="handleCancelReady" />
 
     <!-- 错误提示模态框 -->
     <div v-if="roomStore.error" class="error-modal-overlay">
@@ -145,6 +147,7 @@ import { useUserStore } from '@/stores/userStore.js'; // --- 导入 userStore --
 import { useWebsocketStore } from '@/stores/websocket.js'; // --- 导入 websocketStore ---
 import { useChatStore } from '@/stores/chat.js'; // --- 导入 chatStore ---
 import { useRoomStore } from '@/stores/room.js'; // --- 导入 roomStore ---
+import CountdownOverlay from '@/components/Room/CountdownOverlay.vue'; // --- 导入 CountdownOverlay 组件 ---
 
 export default {
   name: 'RoomView',
@@ -157,7 +160,8 @@ export default {
     SecretChatModal,
     FloatingBall,
     MiniChat,
-    RoomSidebar
+    RoomSidebar,
+    CountdownOverlay
   },
   setup() {
     const route = useRoute();
@@ -604,19 +608,6 @@ export default {
       // 在URL中添加参数，表示只是临时返回大厅
       this.router.push('/lobby?in_room=true&keep_connection=true');
     },
-    handleStartGame() {
-      console.log('[RoomView] Start game button clicked by host.');
-      // Send message to backend to request game start
-      if (this.websocketStore.isConnected) {
-        this.websocketStore.sendMessage({
-          type: 'start_game',
-          room_id: this.roomInfo.invite_code
-        });
-        // Optionally show a temporary loading/waiting state here?
-            } else {
-        this.roomStore.setError('无法开始游戏：网络连接已断开');
-      }
-    },
     handleAddFriend(userId) {
       console.log('[RoomView] 添加好友请求:', userId);
       // 暂未实现 - 将来添加好友功能
@@ -684,6 +675,26 @@ export default {
       this.ws.onmessage = (event) => {
         // ... existing code ...
       }
+    },
+    handleCancelReady() {
+      console.log('[RoomView] 用户取消准备');
+      // 发送取消准备消息到后端
+      if (this.isReady) {
+        this.toggleReady();
+      }
+      
+      // 通知其他用户
+      const message = {
+        type: 'chat',
+        content: '取消了倒计时',
+        user_id: this.currentUser?.id,
+        username: this.currentUser?.username,
+        timestamp: Date.now(),
+        is_system: true,
+        room_id: this.roomStore.roomInfo.invite_code
+      };
+      
+      this.websocketStore.sendMessage(message);
     }
   }
 }

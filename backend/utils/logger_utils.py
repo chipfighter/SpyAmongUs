@@ -23,7 +23,7 @@ def setup_logger(name: str, level: int = logging.INFO, log_file: Optional[str] =
         配置好的 logger 实例
     """
     if name in _logger_cache:
-        return _logger_cache[name]  # 如果缓存中已存在，直接返回缓存的 logger，避免每个模块都加载一遍
+        return _logger_cache[name]  # 如果缓存中已存在，直接返回缓存的 logger，避免每个模块都加载一遍，单例模式实现logger
 
     # 创建新的 logger
     logger = logging.getLogger(name)

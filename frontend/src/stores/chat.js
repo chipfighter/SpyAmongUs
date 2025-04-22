@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { nextTick } from 'vue'
 
 // 简单的消息列表长度限制
 const MAX_MESSAGES = 200;
@@ -17,19 +18,31 @@ export const useChatStore = defineStore('chat', {
     // 添加收到的公共消息 (由 websocketStore 调用)
     addMessage(message) {
       console.log('[ChatStore] Adding message:', message);
-      // TODO: More sophisticated handling for different types (system, chat, ai_stream) needed?
-      // For now, just push everything into the main list.
+      
+      // 简化处理逻辑：所有消息都直接添加到末尾
       this.messages.push(message);
+      
+      // 使用nextTick确保视图更新
+      nextTick(() => {
+        // 空函数，只是触发视图更新周期
+      });
+      
       // Keep the list length manageable
       if (this.messages.length > MAX_MESSAGES) {
         this.messages.shift(); // Remove the oldest message
       }
     },
+    
     // 添加收到的秘密消息 (由 websocketStore 调用)
     addSecretMessage(message) {
       console.log('[ChatStore] Adding secret message:', message);
       this.secretMessages.push(message);
-      // Keep the list length manageable
+      
+      // 使用nextTick确保视图更新
+      nextTick(() => {
+        // 空函数，只是触发视图更新周期
+      });
+      
       if (this.secretMessages.length > MAX_MESSAGES) {
         this.secretMessages.shift(); // Remove the oldest message
       }

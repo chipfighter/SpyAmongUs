@@ -44,7 +44,7 @@ from config import (
 from utils.websocket_manager import WebSocketManager
 from services.message_service import MessageService
 
-# 配置日志
+# 配置日志（当前根路径是）
 setup_logger("SpyAmongUs")
 logger = get_logger(__name__)
 

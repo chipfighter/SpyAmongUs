@@ -14,6 +14,8 @@ export const useWebsocketStore = defineStore('websocket', {
     targetRoomId: null,
     connectionTimeout: null,
     baseUrl: (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace('http', 'ws'),
+    // 保存当前正在处理的AI会话
+    activeAiSessions: new Map(),
   }),
   actions: {
     connect(roomId, token) {
@@ -79,6 +81,14 @@ export const useWebsocketStore = defineStore('websocket', {
         this.connectionTimeout = null;
       }
       
+      // 清理所有活跃的AI会话定时器
+      this.activeAiSessions.forEach(session => {
+        if (session.updateTimer) {
+          clearTimeout(session.updateTimer);
+        }
+      });
+      this.activeAiSessions.clear();
+      
       if (this.socket) {
         try {
           this.socket.onopen = null;
@@ -117,8 +127,8 @@ export const useWebsocketStore = defineStore('websocket', {
     handleMessage(event) {
       try {
         const data = JSON.parse(event.data);
-        console.log('[WS] 收到消息:', data);
 
+        // 对pong消息特殊处理，减少日志
         if (data.type === 'pong') {
           if (this.heartbeatTimeout) {
             clearTimeout(this.heartbeatTimeout);
@@ -127,20 +137,168 @@ export const useWebsocketStore = defineStore('websocket', {
           return;
         }
 
-        // 根据 data.type 分发给其他 Store
+        console.log('[WS] 收到消息:', data);
+        
+        // 快速处理普通聊天消息 - 高优先级立即显示
+        if (data.type === 'chat') {
+          const chatStore = useChatStore();
+          // 添加时间戳以确保消息排序正确
+          if (!data.timestamp) {
+            data.timestamp = Date.now();
+          }
+          // 为普通消息添加高优先级标记，确保即使在AI流式响应期间也能立即显示
+          data._priority = true;
+          chatStore.addMessage(data);
+        } 
+        // 异步处理AI流式消息和其他消息
+        else {
+          // 使用setTimeout将AI消息处理放入下一个宏任务，避免阻塞UI
+          setTimeout(() => {
+            this.processNonChatMessage(data);
+          }, 0);
+        }
+      } catch (error) {
+        console.error('[WS] 处理消息时出错:', error, event.data);
+      }
+    },
+    
+    // 处理非聊天消息
+    processNonChatMessage(data) {
+      // AI流式消息特殊处理
+      if (data.type === 'ai_stream') {
+        this.processAiStreamMessage(data);
+      } else {
+        // 其他类型消息正常处理
+        this.processOtherMessage(data);
+      }
+    },
+    
+    // 处理AI流式消息
+    processAiStreamMessage(data) {
+      const sessionId = data.session_id;
+      if (!sessionId) {
+        console.error('[WS] AI stream message missing session_id:', data);
+        return;
+      }
+      
+      const chatStoreForAI = useChatStore();
+      
+      // 获取或创建会话数据
+      let sessionData = this.activeAiSessions.get(sessionId);
+      
+      // 如果是开始消息，创建新会话
+      if (data.is_start) {
+        if (!sessionData) {
+          sessionData = {
+            content: data.content || '',
+            updateTimer: null,
+            lastUpdateTime: Date.now(),
+            needsUpdate: true,
+            isStreaming: true,
+            timestamp: data.timestamp || Date.now()
+          };
+          this.activeAiSessions.set(sessionId, sessionData);
+          
+          // 创建新的AI消息对象
+          const aiMessage = {
+            id: sessionId, 
+            type: 'ai_stream',
+            content: sessionData.content,
+            isStreaming: true,       // 明确标记为正在流式传输
+            is_start: data.is_start, // 保留原始标记
+            is_end: data.is_end,     // 保留原始标记
+            timestamp: sessionData.timestamp,
+            sessionId: sessionId,
+            username: 'AI助理', 
+            avatar_url: '/default_room_robot_avatar.jpg' 
+          };
+          
+          // 添加消息到聊天存储
+          chatStoreForAI.addMessage(aiMessage);
+          console.log('[WS] Started new AI stream message:', sessionId);
+        } else {
+          console.warn('[WS] Received AI stream start flag for existing session:', sessionId);
+          if (data.content) {
+            sessionData.content += data.content;
+            sessionData.needsUpdate = true;
+          }
+          sessionData.isStreaming = true;
+        }
+      } 
+      // 如果不是开始消息，确保会话存在
+      else if (sessionData) {
+        // 添加内容
+        if (data.content) {
+          sessionData.content += data.content;
+          sessionData.needsUpdate = true;
+        }
+        
+        // 设置流式状态 - 除非是结束消息，否则一直标记为流式传输中
+        sessionData.isStreaming = !data.is_end;
+        
+        // 检查是否需要立即更新UI
+        const shouldUpdateNow = data.is_end || (Date.now() - sessionData.lastUpdateTime > 100);
+        
+        if (shouldUpdateNow && sessionData.needsUpdate) {
+          this.updateAiMessage(sessionId, sessionData);
+          sessionData.lastUpdateTime = Date.now();
+          sessionData.needsUpdate = false;
+        } 
+        // 如果不需要立即更新且没有计时器，创建一个
+        else if (sessionData.needsUpdate && !sessionData.updateTimer) {
+          sessionData.updateTimer = setTimeout(() => {
+            if (sessionData.needsUpdate) {
+              this.updateAiMessage(sessionId, sessionData);
+              sessionData.lastUpdateTime = Date.now();
+              sessionData.needsUpdate = false;
+            }
+            sessionData.updateTimer = null;
+          }, 100); // 100ms节流更新
+        }
+        
+        // 如果结束，清理会话
+        if (data.is_end) {
+          if (sessionData.updateTimer) {
+            clearTimeout(sessionData.updateTimer);
+          }
+          this.activeAiSessions.delete(sessionId);
+          console.log('[WS] Ended AI stream message:', sessionId);
+        }
+      } else {
+        console.error('[WS] Received AI stream chunk for non-existent session:', sessionId, data);
+      }
+    },
+    
+    // 更新AI消息内容
+    updateAiMessage(sessionId, sessionData) {
+      const chatStore = useChatStore();
+      let aiMessage = chatStore.messages.find(msg => msg.sessionId === sessionId && msg.type === 'ai_stream');
+      
+      if (aiMessage) {
+        aiMessage.content = sessionData.content;
+        aiMessage.isStreaming = sessionData.isStreaming; // 更新流式状态
+        aiMessage.is_end = !sessionData.isStreaming;     // 同步更新结束标志
+        console.log(`[WS] 更新AI消息 ${sessionId}, isStreaming=${aiMessage.isStreaming}`);
+      } else {
+        console.error('[WS] Cannot find AI message to update:', sessionId);
+      }
+    },
+    
+    // 处理其他类型的消息
+    processOtherMessage(data) {
         const roomStore = useRoomStore();
         const chatStore = useChatStore();
 
         switch (data.type) {
           case 'system':
-            let systemContent = '系统消息';
+          let systemContent = '系统消息';
             if (data.event === 'connected') {
               if (data.context === 'create' && data.room_name) {
                 systemContent = `您已创建了"${data.room_name}"房间`;
               } else if (data.context === 'join' && data.room_name) {
                 systemContent = `您已加入"${data.room_name}"房间`;
               } else {
-                systemContent = '已连接到房间';
+              systemContent = '已连接到房间';
               }
             } else if (data.message) {
               systemContent = data.message;
@@ -153,135 +311,95 @@ export const useWebsocketStore = defineStore('websocket', {
               timestamp: data.timestamp || Date.now()
             });
             break;
-          case 'chat':
-            chatStore.addMessage(data);
-            break;
-          case 'ai_stream':
-            const chatStoreForAI = useChatStore();
-            const sessionId = data.session_id;
-
-            if (!sessionId) {
-              console.error('[WS] AI stream message missing session_id:', data);
-              break;
-            }
-
-            let aiMessage = chatStoreForAI.messages.find(msg => msg.sessionId === sessionId && msg.type === 'ai_stream');
-
-            if (data.is_start) {
-              if (!aiMessage) {
-                aiMessage = {
-                  id: sessionId, 
-                  type: 'ai_stream',
-                  content: data.content || '',
-                  isStreaming: true,
-                  timestamp: data.timestamp || Date.now(),
-                  sessionId: sessionId,
-                  username: 'AI助理', 
-                  avatar_url: '/default_room_robot_avatar.jpg' 
-                };
-                chatStoreForAI.addMessage(aiMessage);
-                console.log('[WS] Started new AI stream message:', sessionId);
-              } else {
-                 console.warn('[WS] Received AI stream start flag for existing session:', sessionId);
-                 if (data.content) aiMessage.content += data.content;
-                 aiMessage.isStreaming = true;
-              }
-            } else if (aiMessage) {
-              if (data.content) {
-                aiMessage.content += data.content;
-              }
-              if (data.is_end) {
-                aiMessage.isStreaming = false;
-                console.log('[WS] Ended AI stream message:', sessionId);
-              } else {
-                 aiMessage.isStreaming = true;
-              }
-            } else {
-              console.error('[WS] Received AI stream chunk for non-existent session:', sessionId, data);
-            }
-            break;
           case 'secret':
             chatStore.addSecretMessage(data);
             break;
-          case 'user_list_update':
-            roomStore.updateUserList(data.users);
+        case 'user_list_update':
+          roomStore.updateUserList(data.users);
             break;
           case 'user_join':
-          case 'user_leave':  
-          case 'host_leave':
-            // 用户加入/离开消息处理
-            console.log(`[WS] 收到${data.type === 'user_join' ? '用户加入' : (data.type === 'host_leave' ? '房主离开' : '用户离开')}消息:`, data);
-            
-            // 根据消息类型处理
-            if (data.type === 'user_join') {
-              // 用户加入 - 直接使用消息中的字段构建用户对象
-              if (data.user_id && data.username) {
-                const newUser = {
-                  id: data.user_id,
-                  username: data.username,
-                  avatar_url: data.avatar_url || '/default_avatar.jpg',
-                  status: 'in_room'
-                };
-                roomStore.addUser(newUser);
-                console.log(`[WS] 添加新用户到列表: ${data.username}`);
-              }
-            } 
-            else if (data.type === 'user_leave') {
-              // 普通用户离开 - 根据用户ID移除
-              if (data.user_id) {
-                roomStore.removeUser(data.user_id);
-                console.log(`[WS] 从列表移除用户: ${data.user_id}`);
+          case 'user_leave':
+        case 'host_leave':
+          // 用户加入/离开消息处理
+          console.log(`[WS] 收到${data.type === 'user_join' ? '用户加入' : (data.type === 'host_leave' ? '房主离开' : '用户离开')}消息:`, data);
+          
+          // 根据消息类型处理
+          if (data.type === 'user_join') {
+            // 用户加入 - 直接使用消息中的字段构建用户对象
+            if (data.user_id && data.username) {
+              const newUser = {
+                id: data.user_id,
+                username: data.username,
+                avatar_url: data.avatar_url || '/default_avatar.jpg',
+                status: 'in_room'
+              };
+              roomStore.addUser(newUser);
+              console.log(`[WS] 添加新用户到列表: ${data.username}`);
+            }
+          } 
+          else if (data.type === 'user_leave') {
+            // 普通用户离开 - 根据用户ID移除
+            if (data.user_id) {
+              roomStore.removeUser(data.user_id);
+              console.log(`[WS] 从列表移除用户: ${data.user_id}`);
+            }
+          }
+          else if (data.type === 'host_leave') {
+            // 房主离开 - 移除旧房主并设置新房主
+            if (data.user_id) {
+              roomStore.removeUser(data.user_id);
+              if (data.new_host_id) {
+                roomStore.setHost(data.new_host_id);
+                console.log(`[WS] 房主变更为: ${data.new_host_id}`);
               }
             }
-            else if (data.type === 'host_leave') {
-              // 房主离开 - 移除旧房主并设置新房主
-              if (data.user_id) {
-                roomStore.removeUser(data.user_id);
-                if (data.new_host_id) {
-                  roomStore.setHost(data.new_host_id);
-                  console.log(`[WS] 房主变更为: ${data.new_host_id}`);
-                }
-              }
-            }
-            
-            // 添加系统消息通知
-            if (data.content) {
-              chatStore.addMessage({
-                is_system: true,
-                content: data.content,
-                timestamp: data.timestamp || Date.now()
-              });
+          }
+          
+          // 添加系统消息通知
+          if (data.content) {
+                chatStore.addMessage({ 
+                    is_system: true, 
+              content: data.content,
+                    timestamp: data.timestamp || Date.now() 
+                });
             }
             break;
-          case 'user_ready':
-            roomStore.updateReadyStatus(data);
-            break;
-          case 'user_ready_update': 
+        case 'user_ready':
+          roomStore.updateReadyStatus(data);
+          break;
+        case 'user_ready_update': 
             roomStore.updateReadyStatus(data);
             break;
           case 'game_start':
             roomStore.setGameStatus(true);
-            // 可能需要导航到游戏界面或更新UI
-            console.log('[WS] Game started!');
+          // 可能需要导航到游戏界面或更新UI
+          console.log('[WS] Game started!');
             break;
-          case 'game_over':
+        case 'game_over':
             roomStore.setGameStatus(false);
-            // 显示游戏结果?
-            console.log('[WS] Game over!');
+          // 显示游戏结果?
+          console.log('[WS] Game over!');
             break;
-          case 'new_host':
+        case 'countdown_start':
+            // 处理倒计时开始消息
+            console.log('[WS] 倒计时开始:', data);
+            this.triggerCountdownStart(data.duration || 5);
+            break;
+        case 'countdown_cancelled':
+            // 处理倒计时取消消息
+            console.log('[WS] 倒计时取消:', data);
+            this.triggerCountdownCancel(data.reason || '倒计时已取消');
+            break;
+        case 'new_host':
             if (data.new_host_id) {
-                roomStore.setHost(data.new_host_id);
+              roomStore.setHost(data.new_host_id);
             }
             break;
           default:
-            console.warn('[WS] 未处理的消息类型:', data.type);
-        }
-
-      } catch (error) {
-        console.error('[WS] 处理消息时出错:', error, event.data);
+          console.warn('[WS] 未处理的消息类型:', data.type);
       }
     },
+    
     startHeartbeat() {
       if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
       if (this.heartbeatTimeout) clearTimeout(this.heartbeatTimeout);
@@ -329,6 +447,15 @@ export const useWebsocketStore = defineStore('websocket', {
       if (this.heartbeatTimeout) clearTimeout(this.heartbeatTimeout);
       this.heartbeatInterval = null;
       this.heartbeatTimeout = null;
+      
+      // 清理AI会话
+      this.activeAiSessions.forEach(session => {
+        if (session.updateTimer) {
+          clearTimeout(session.updateTimer);
+        }
+      });
+      this.activeAiSessions.clear();
+      
       this.socket = null;
       this.isConnected = false;
       this.connectionStatus = 'disconnected';
@@ -409,5 +536,27 @@ export const useWebsocketStore = defineStore('websocket', {
       this.reconnectAttempts = 0;
       this.startHeartbeat();
     },
+    triggerCountdownStart(duration) {
+      // 找到所有引用此store的组件中的countdownOverlay引用
+      const roomViewInstance = document.querySelector('.room-container')?.__vueParentComponent?.ctx;
+      if (roomViewInstance && roomViewInstance.$refs.countdownOverlay) {
+        roomViewInstance.$refs.countdownOverlay.startCountdown(duration);
+      }
+    },
+    triggerCountdownCancel(reason) {
+      // 找到所有引用此store的组件中的countdownOverlay引用
+      const roomViewInstance = document.querySelector('.room-container')?.__vueParentComponent?.ctx;
+      if (roomViewInstance && roomViewInstance.$refs.countdownOverlay) {
+        roomViewInstance.$refs.countdownOverlay.cancelCountdown();
+      }
+      
+      // 显示取消原因的系统消息
+      const chatStore = useChatStore();
+      chatStore.addMessage({
+        is_system: true,
+        content: `倒计时已取消: ${reason}`,
+        timestamp: Date.now()
+      });
+    }
   },
 }) 

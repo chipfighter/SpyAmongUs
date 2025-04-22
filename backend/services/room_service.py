@@ -39,7 +39,7 @@ class RoomService:
         self.redis_client = redis_client
         self.websocket_manager = websocket_manager
         self.message_service = None
-        logger.info("房间服务已初始化")
+        self.countdown_tasks = {}  # 房间ID -> asyncio任务的映射
 
     def set_message_service(self, message_service):
         """设置消息服务，避免循环依赖"""
@@ -399,10 +399,14 @@ class RoomService:
 
                 # 如果没有其他用户，直接删除房间
                 if not other_users:
-                    logger.info(f"房主 {user_id} 是最后一人退出房间 {invite_code}，将删除房间")
+                    # 房主是最后一人退出房间，将删除房间
                     # 清理房主状态并删除房间
                     await self.user_service.update_current_room(user_id, None)
                     await self.user_service.update_user_status(user_id, USER_STATUS_ONLINE)
+                    
+                    # 从准备用户集合中移除该用户
+                    await self.redis_client.remove_user_from_ready_set(invite_code, user_id)
+                    
                     # 调用 delete_room，但不通知用户，因为已经没人了
                     return await self.delete_room(invite_code, operator_id=user_id, notify_users=False, reason="房主退出且房间为空")
 
@@ -418,10 +422,13 @@ class RoomService:
                          # 同样删除房间
                          await self.user_service.update_current_room(user_id, None)
                          await self.user_service.update_user_status(user_id, USER_STATUS_ONLINE)
+                         
+                         # 从准备用户集合中移除该用户
+                         await self.redis_client.remove_user_from_ready_set(invite_code, user_id)
+                         
                          return await self.delete_room(invite_code, operator_id=user_id, notify_users=False, reason="转移房主失败，房间关闭")
 
                 # 更新房间的房主信息
-                logger.info(f"房主 {user_id} 退出，将房主转移给 {next_host_id}")
                 await self.redis_client.update_room_host(invite_code, next_host_id)
 
                 # 获取新旧房主名字用于通知
@@ -441,10 +448,28 @@ class RoomService:
                     "message": "退出房间失败"
                 }
 
+            # 从准备用户集合中移除用户
+            await self.redis_client.remove_user_from_ready_set(invite_code, user_id)
+            
+            # 6.如果存在倒计时任务，删除这个任务
+            if invite_code in self.countdown_tasks:
+                self.countdown_tasks[invite_code].cancel()
+                del self.countdown_tasks[invite_code]
+                
+                # 广播倒计时取消消息
+                if self.websocket_manager:
+                    await self.websocket_manager.broadcast_message(
+                        invite_code=invite_code, 
+                        message={
+                            "type": "countdown_cancelled", 
+                            "reason": "有玩家离开房间"
+                        },
+                        is_special=False
+                    )
+
             # 6. 清理该用户的状态 (无论是否房主)
             await self.user_service.update_current_room(user_id, None)
             await self.user_service.update_user_status(user_id, USER_STATUS_ONLINE)
-            logger.info(f"用户 {user_id} 状态已清理：current_room=None, status=online")
 
             # 7. 发送通知和广播
             # 获取离开用户的用户名
@@ -712,6 +737,22 @@ class RoomService:
                 # 已准备 -> 取消
                 await self.redis_client.remove_user_from_ready_set(invite_code, user_id)
                 new_status = False
+                
+                # 取消准备时，检查是否需要取消倒计时
+                if invite_code in self.countdown_tasks:
+                    self.countdown_tasks[invite_code].cancel()
+                    del self.countdown_tasks[invite_code]
+                    
+                    # 广播倒计时取消消息
+                    if self.websocket_manager:
+                        await self.websocket_manager.broadcast_message(
+                            invite_code=invite_code, 
+                            message={
+                                "type": "countdown_cancelled", 
+                                "reason": "有玩家取消准备"
+                            },
+                            is_special=False
+                        )
             else:
                 # 未准备 -> 准备
                 await self.redis_client.add_user_to_ready_set(invite_code, user_id)
@@ -735,8 +776,108 @@ class RoomService:
             else:
                 logger.warning("用户准备service: WebSocket管理器未配置，无法广播")
 
+            # 4. 如果是准备状态，检查是否所有人都已准备好
+            if new_status:
+                # 获取房间所有用户和已准备用户
+                all_users = await self.redis_client.get_room_users(invite_code)
+                ready_users = await self.redis_client.get_room_ready_users(invite_code)
+                
+                # 检查是否所有人都准备好了（使用集合比较）
+                all_users_set = set(all_users)
+                if all_users_set and ready_users and all_users_set == ready_users:
+                    # 启动游戏开始倒计时
+                    await self.start_game_countdown(invite_code)
+                    
+                    return {
+                        "success": True, 
+                        "message": "准备状态已切换，所有玩家已准备就绪", 
+                        "data": {
+                            "is_ready": new_status,
+                            "all_ready": True
+                        }
+                    }
+
             return {"success": True, "message": "准备状态已切换", "data": {"is_ready": new_status}}
 
         except Exception as e:
             logger.error(f"toggle_ready 执行出错 (房间: {invite_code}, 用户: {user_id}): {str(e)}", exc_info=True)
             return {"success": False, "message": "处理准备状态时发生服务器内部错误"}
+            
+    async def start_game_countdown(self, invite_code: str):
+        """
+        开始游戏倒计时
+        
+        Args:
+            invite_code: 房间邀请码
+        """
+        logger.info(f"房间 {invite_code} 开始游戏倒计时")
+        
+        # 如果已有倒计时任务，先取消
+        if invite_code in self.countdown_tasks:
+            self.countdown_tasks[invite_code].cancel()
+            del self.countdown_tasks[invite_code]
+            
+        # 创建新的倒计时任务
+        task = asyncio.create_task(self._countdown_task(invite_code))
+        self.countdown_tasks[invite_code] = task
+        
+        # 设置任务完成回调，清理字典
+        def cleanup_task(t):
+            self.countdown_tasks.pop(invite_code, None)
+            # 检查任务是否有异常但不是取消异常
+            if t.done() and not t.cancelled():
+                try:
+                    t.result()  # 如果有异常会抛出
+                except asyncio.CancelledError:
+                    pass  # 忽略取消异常
+                except Exception as e:
+                    logger.error(f"房间 {invite_code} 倒计时任务异常: {e}")
+        
+        task.add_done_callback(cleanup_task)
+            
+    async def _countdown_task(self, invite_code: str):
+        """
+        倒计时任务具体实现
+        
+        Args:
+            invite_code: 房间邀请码
+
+        Notes:
+            仅仅是一个实现倒计时的room_service module的内置函数，具体的游戏初始化放到game_service
+        """
+        try:
+            # 倒计时时长（秒）
+            countdown_duration = 5
+            
+            # 广播倒计时开始
+            if self.websocket_manager:
+                await self.websocket_manager.broadcast_message(
+                    invite_code=invite_code,
+                    message={
+                        "type": "countdown_start", 
+                        "duration": countdown_duration
+                    },
+                    is_special=False
+                )
+            
+            # 等待倒计时结束
+            await asyncio.sleep(countdown_duration)
+
+        # TODO:初始化游戏开始的调用+进一步操作，放在game_service中实现
+            
+        except asyncio.CancelledError:
+            logger.info(f"房间 {invite_code} 倒计时被取消")
+            raise  # 重新抛出异常
+        except Exception as e:
+            logger.error(f"房间 {invite_code} 倒计时任务发生错误: {str(e)}")
+            # 广播错误消息
+            if self.websocket_manager:
+                await self.websocket_manager.broadcast_message(
+                    invite_code=invite_code,
+                    message={
+                        "type": "game_error",
+                        "message": "游戏启动失败，请重试"
+                    },
+                    is_special=False
+                )
+            raise  

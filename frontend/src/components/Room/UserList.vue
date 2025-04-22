@@ -58,19 +58,9 @@
     <div class="secret-chat-area" v-if="!gameStarted">
       <!-- Host: 房主按钮区 -->
       <div v-if="isHost" class="host-buttons">
-        <!-- Start Game Button -->
+        <!-- 准备游戏按钮 -->
         <button 
-          class="start-game-button" 
-          @click="emit('start-game')" 
-          :disabled="!canStartGame"
-          :title="canStartGame ? '开始游戏' : '等待所有玩家准备'"
-        >
-          开始游戏
-        </button>
-        
-        <!-- Host Ready Button -->
-        <button 
-          class="ready-game-button host-ready-button" 
+          class="ready-game-button" 
           @click="emit('toggle-ready')"
         >
           {{ isReady ? '取消准备' : '准备游戏' }}
@@ -153,7 +143,6 @@ const emit = defineEmits([
   'toggle-ready', 
   'toggle-secret-chat',
   'start-resize',
-  'start-game',
   'add-friend',
   'view-user-details',
   'private-message',
@@ -211,25 +200,10 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', closeActionButtons);
 });
 
-const canStartGame = computed(() => {
-  // 最少需要3名玩家
-  const minPlayers = 3;
-  
-  // 检查是否所有玩家都已准备
-  const allReady = props.users.length === props.readyUsers.length;
-  
-  // 满足以下条件才能开始游戏：
-  // 1. 玩家数量达到最低要求
-  // 2. 所有玩家（包括房主）都已准备
-  return props.users.length >= minPlayers && allReady;
-});
-
 const onAvatarError = (event) => {
   event.target.src = '/default_avatar.jpg';
 };
 
-// 注意：原 RoomView 中的 toggleUserList, toggleReady, toggleSecretChat, startResizing
-// 这些方法现在需要在父组件(RoomView)中实现，并由本组件通过 emit 触发。
 </script>
 
 <style scoped>
@@ -241,6 +215,7 @@ const onAvatarError = (event) => {
   flex-direction: column;
   position: relative;
   transition: width 0.3s ease;
+  z-index: 1100; /* 修改为比倒计时遮罩更高的值，确保在遮罩之上 */
 }
 
 .users-container.resizing {
@@ -453,7 +428,8 @@ const onAvatarError = (event) => {
   padding: 15px;
   display: flex;
   justify-content: center;
-  border-top: 1px solid #f0f0f0; /* 添加顶部边框 */
+  position: relative;
+  z-index: 1000;
 }
 
 .secret-chat-button, .ready-game-button {
@@ -466,6 +442,9 @@ const onAvatarError = (event) => {
   cursor: pointer;
   transition: all 0.3s;
   text-align: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  position: relative; /* 为按钮也添加相对定位 */
+  z-index: 1000; /* 默认按钮在遮罩下方 */
 }
 
 .secret-chat-button {
@@ -480,10 +459,16 @@ const onAvatarError = (event) => {
 .ready-game-button {
   background-color: #28a745;
   color: white;
+  margin: 0 auto;
+  min-width: 260px;
+  position: relative;
+  z-index: 2000; /* 设置比遮罩层更高的值，确保按钮可见和可点击 */
 }
 
 .ready-game-button:hover {
   background-color: #218838;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
 }
 
 /* Ready indicator style */
@@ -495,41 +480,5 @@ const onAvatarError = (event) => {
   border-radius: 4px;
   margin-left: 6px;
   vertical-align: middle;
-}
-
-/* Start Game button style */
-.start-game-button {
-  padding: 12px 0;
-  width: 100%;
-  border: none;
-  border-radius: 6px;
-  font-weight: 600;
-  font-size: 16px;
-  cursor: pointer;
-  transition: all 0.3s;
-  text-align: center;
-  background-color: #1890ff; /* Blue */
-  color: white;
-}
-
-.start-game-button:hover:not(:disabled) {
-  background-color: #40a9ff;
-}
-
-.start-game-button:disabled {
-  background-color: #a0cfff; /* Lighter blue when disabled */
-  cursor: not-allowed;
-}
-
-/* 添加房主按钮容器样式 */
-.host-buttons {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  gap: 10px;
-}
-
-.host-ready-button {
-  margin-top: 8px;
 }
 </style> 
