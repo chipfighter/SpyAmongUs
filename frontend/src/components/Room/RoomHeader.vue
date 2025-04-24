@@ -12,7 +12,8 @@
       <span v-else-if="connectionStatus === 'connecting'" title="正在连接">🟡</span>
       <span v-else title="连接已断开">🔴</span>
     </div>
-    <div class="room-actions">
+    <!-- 只在游戏未开始且不在上帝轮询阶段时显示按钮 -->
+    <div class="room-actions" v-if="!gameStarted && !isGodPolling">
       <button 
         class="back-to-lobby-button" 
         @click="$emit('back-to-lobby')"
@@ -46,6 +47,10 @@
         </button>
       </template>
     </div>
+    <!-- 游戏状态指示器 -->
+    <div v-else class="game-status-indicator">
+      {{ isGodPolling ? '选择上帝中...' : '游戏进行中' }}
+    </div>
   </div>
 </template>
 
@@ -66,6 +71,16 @@ defineProps({
   isHost: {
     type: Boolean,
     required: true,
+    default: false
+  },
+  // 添加游戏状态属性
+  gameStarted: {
+    type: Boolean,
+    default: false
+  },
+  // 添加上帝轮询状态属性
+  isGodPolling: {
+    type: Boolean,
     default: false
   }
 });
@@ -226,4 +241,13 @@ defineEmits([
   background-color: #E57373;
 }
 
+/* 游戏状态指示器样式 */
+.game-status-indicator {
+  padding: 8px 16px;
+  background-color: #1890ff;
+  border-radius: 4px;
+  color: white;
+  font-weight: bold;
+  text-align: center;
+}
 </style> 

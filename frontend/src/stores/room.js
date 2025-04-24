@@ -17,8 +17,13 @@ const getDefaultState = () => ({
   gameStarted: false,
   isCurrentUserReady: false,
   isLoading: false,
-  loadingText: '',
+  loadingText: '加载中...',
   error: null,
+  showSecretChatModal: false,
+  isGodPolling: false,
+  roles: null,
+  currentRole: '',
+  spyTeammates: [],
 })
 
 export const useRoomStore = defineStore('room', {
@@ -400,7 +405,7 @@ export const useRoomStore = defineStore('room', {
       if (!isCurrentUser) {
         // 显示toast提示
         if (data.message) {
-          this.showToast('info', data.message);
+        this.showToast('info', data.message);
         }
         
         // 触发事件显示询问状态弹窗
@@ -436,6 +441,25 @@ export const useRoomStore = defineStore('room', {
       } catch (error) {
         console.error('[RoomStore] 显示Toast失败:', error);
         console.log(`[Toast Fallback] ${type}: ${message}`);
+      }
+    },
+    setGodPollingStatus(isPolling) {
+      console.log(`[RoomStore] 设置上帝轮询状态: ${isPolling}`);
+      this.isGodPolling = isPolling;
+    },
+    setRoleInfo(roleData) {
+      console.log('[RoomStore] 设置角色信息', roleData);
+      
+      if (roleData.role) {
+        this.currentRole = roleData.role;
+      }
+      
+      if (roleData.roles) {
+        this.roles = roleData.roles;
+      }
+      
+      if (roleData.spy_teammates) {
+        this.spyTeammates = roleData.spy_teammates;
       }
     },
   },

@@ -396,11 +396,15 @@ export const useWebsocketStore = defineStore('websocket', {
             }
             break;
         case 'god_role_inquiry':
+            // 开始轮询上帝角色时，设置轮询状态为true
+            roomStore.setGodPollingStatus(true);
             // 处理上帝角色询问消息
             console.log('[WS] 收到上帝角色询问:', data);
             roomStore.setGodRoleInquiry(true, data.message, data.timeout);
             break;
         case 'god_role_inquiry_status':
+            // 收到轮询状态消息时，设置轮询状态为true
+            roomStore.setGodPollingStatus(true);
             // 处理上帝角色询问状态广播
             console.log('[WS] 收到上帝角色询问状态:', data);
             roomStore.handleGodRoleInquiryStatus(data);
@@ -429,9 +433,32 @@ export const useWebsocketStore = defineStore('websocket', {
             }));
             break;
         case 'god_words_selected':
-            // 处理选词完成消息
+            // 处理选词完成消息，关闭所有状态弹窗
             console.log('[WS] 上帝选词完成:', data);
+            
+            // 设置游戏状态为加载中
             document.dispatchEvent(new CustomEvent('god-words-selected', { 
+              detail: data
+            }));
+            break;
+        case 'role_word_assignment':
+            // 处理角色和词语分配消息
+            console.log('[WS] 收到角色和词语分配消息:', data);
+            // 设置角色信息
+            roomStore.setRoleInfo(data);
+            break;
+        case 'game_initialized':
+            // 游戏初始化完成
+            console.log('[WS] 游戏初始化完成');
+            
+            // 设置游戏状态为已开始
+            roomStore.setGameStatus(true);
+            
+            // 结束上帝轮询阶段
+            roomStore.setGodPollingStatus(false);
+            
+            // 发送初始化完成事件，由组件处理UI相关逻辑
+            document.dispatchEvent(new CustomEvent('game-initialized', { 
               detail: data
             }));
             break;

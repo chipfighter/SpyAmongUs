@@ -673,13 +673,14 @@ class RoomService:
                 
                 # 获取并填充完整的用户信息列表
                 full_user_list = []
-                for user_id in user_ids:
-                    user_info_result = await self.user_service.get_user_info(user_id)
+                tasks = [self.user_service.get_user_info(user_id) for user_id in user_ids]
+                user_info_results = await asyncio.gather(*tasks)
+                
+                for i, user_info_result in enumerate(user_info_results):
+                    user_id = user_ids[i]
                     if user_info_result["success"]:
-                        # 仅包含基础信息，符合 RoomView 预期
                         full_user_list.append(user_info_result["data"])
                     else:
-                        # 如果获取用户信息失败，可以记录日志
                         logger.warning(f"无法获取房间 {invite_code} 中用户 {user_id} 的信息")
                         full_user_list.append({"id": user_id, "username": f"用户{user_id[:4]}", "avatar_url": "/default_avatar.jpg", "status": "unknown"})
 

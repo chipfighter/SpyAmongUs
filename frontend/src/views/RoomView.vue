@@ -11,6 +11,8 @@
       :room-info="roomInfo" 
       :connection-status="connectionStatus" 
       :is-host="isHost"
+      :game-started="gameStarted"
+      :is-god-polling="isGodPolling"
       @copy-invite-code="copyInviteCode"
       @back-to-lobby="backToLobby"
       @leave-room="handleLeaveRoom"
@@ -87,6 +89,10 @@
         @private-message="handlePrivateMessage" 
         @kick-user="handleKickUser"
         :is-host="isHost"
+        :is-god-polling="isGodPolling"
+        :roles="roomStore.roles"
+        :current-role="roomStore.currentRole"
+        :spy-teammates="roomStore.spyTeammates"
       />
     </div>
 
@@ -278,7 +284,8 @@ export default {
       showGodWordSelectionStatus: false,
       godWordSelectionStatusMessage: '',
       godWordSelectionStatusTimeout: 7,
-      godWordSelectionStatusUsername: ''
+      godWordSelectionStatusUsername: '',
+      isGodPolling: false
     }
   },
   computed: {
@@ -344,6 +351,9 @@ export default {
         return this.roomStore.secretChatTargets;
         // Or simplify if local data `secretChatTargets` is sufficient
         // return this.secretChatTargets;
+    },
+    isGodPolling() {
+      return this.roomStore.isGodPolling;
     }
   },
   async created() {
@@ -374,6 +384,9 @@ export default {
     
     // 添加Toast消息事件监听
     document.addEventListener('room-toast', this.handleRoomToastEvent);
+
+    // 添加到created钩子中的事件监听:
+    document.addEventListener('game-initialized', this.handleGameInitializedEvent);
   },
   mounted() {
     // Mounted hook is now empty, connection logic moved to watcher
@@ -443,6 +456,9 @@ export default {
     // 移除上帝选词相关事件监听
     document.removeEventListener('god-words-selection', this.handleGodWordSelectionEvent);
     document.removeEventListener('god-words-selected', this.handleGodWordsSelectedEvent);
+
+    // 在beforeUnmount钩子中移除事件监听:
+    document.removeEventListener('game-initialized', this.handleGameInitializedEvent);
   },
   methods: {
     async handleLeaveRoom() {
@@ -1008,20 +1024,30 @@ export default {
     handleGodWordsSelectedEvent(event) {
       console.log('[RoomView] 收到上帝选词完成事件:', event.detail);
       
-      // 关闭所有选词相关弹窗
+      // 检查当前弹窗状态并记录
+      console.log('[RoomView] 弹窗状态检查 (选词完成前):', {
+        showGodWordSelection: this.showGodWordSelection,
+        showGodWordSelectionStatus: this.showGodWordSelectionStatus,
+        showGameLoading: this.showGameLoading
+      });
+      
+      // 强制关闭所有相关弹窗
+      this.showGodRoleInquiry = false;
+      this.showGodRoleInquiryStatus = false;
       this.showGodWordSelection = false;
       this.showGodWordSelectionStatus = false;
       
-      // 显示游戏加载动画 - 与WebSocket消息处理保持一致
+      // 显示游戏加载动画
       this.showGameLoading = true;
       this.gameLoadingTitle = '游戏初始化中';
       this.gameLoadingMessage = '正在分配角色，请稍候...';
       
-      // 记录调试日志
-      console.log('[RoomView] 选词完成处理完毕，状态: ' +
-        `选词弹窗=${this.showGodWordSelection}, ` +
-        `状态弹窗=${this.showGodWordSelectionStatus}, ` + 
-        `加载动画=${this.showGameLoading}`);
+      // 再次检查弹窗状态并记录
+      console.log('[RoomView] 弹窗状态检查 (选词完成后):', {
+        showGodWordSelection: this.showGodWordSelection,
+        showGodWordSelectionStatus: this.showGodWordSelectionStatus,
+        showGameLoading: this.showGameLoading
+      });
     },
     
     // 添加通知显示方法
@@ -1066,8 +1092,8 @@ export default {
       // 发送上帝选词消息给后端
       this.websocketStore.sendMessage({
         type: 'god_words_selected',
-        civilian_word: wordsData.civilian_word,
-        spy_word: wordsData.spy_word
+        civilian_word: wordsData.teamOne[0],
+        spy_word: wordsData.teamTwo[0]
       });
       
       // 关闭选词弹窗并显示加载动画
@@ -1090,6 +1116,36 @@ export default {
       
       // 显示超时提示
       this.showNotification('warning', '选词超时！系统将重新询问上帝角色...');
+    },
+    // 添加处理"game-initialized"事件的方法，用于关闭加载界面
+    handleGameInitializedEvent(event) {
+      console.log('[RoomView] 收到游戏初始化完成事件:', event.detail);
+      
+      // 记录当前状态
+      console.log('[RoomView] 游戏初始化前状态：', {
+        游戏加载动画: this.showGameLoading,
+        上帝轮询状态: this.roomStore.isGodPolling,
+        游戏已开始: this.gameStarted
+      });
+      
+      // 确保关闭所有相关弹窗
+      this.showGodRoleInquiry = false;
+      this.showGodRoleInquiryStatus = false;
+      this.showGodWordSelection = false;
+      this.showGodWordSelectionStatus = false;
+      
+      // 关闭加载动画
+      this.showGameLoading = false;
+      
+      // 显示通知
+      this.showNotification('success', '游戏初始化完成，游戏开始！');
+      
+      // 记录更新后的状态
+      console.log('[RoomView] 游戏初始化后状态：', {
+        游戏加载动画: this.showGameLoading,
+        上帝轮询状态: this.roomStore.isGodPolling,
+        游戏已开始: this.gameStarted
+      });
     },
   }
 }

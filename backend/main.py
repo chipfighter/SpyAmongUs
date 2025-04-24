@@ -403,8 +403,17 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     if message_data.get("type") == "god_words_selected":
                         logger.info(f"处理上帝选词: {message_data}")
                         # 获取词语数据
-                        team_one_words = message_data.get("team_one_words", [])
-                        team_two_words = message_data.get("team_two_words", [])
+                        civilian_word = message_data.get("civilian_word", "")
+                        spy_word = message_data.get("spy_word", "")
+                        
+                        if not civilian_word or not spy_word:
+                            logger.error(f"词语数据不完整: civilian_word={civilian_word}, spy_word={spy_word}")
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": "词语数据不完整",
+                                "timestamp": int(time.time() * 1000)
+                            })
+                            continue
                         
                         # 广播消息给所有玩家，通知他们上帝已选词
                         await websocket_manager.broadcast_message(
@@ -417,7 +426,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             is_special=False
                         )
                         
-                        # TODO: 游戏初始化（后续实现）
+                        # 调用游戏服务的初始化方法
+                        await room_service.game_service.initialize_game(room_id, civilian_word, spy_word)
+                        
                         continue
                     
                     # 处理上帝选词超时消息
@@ -434,7 +445,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             is_special=False
                         )
                         
-                        # TODO: 直接AI选词（后续实现）
                         continue
                     
                     # 处理所有普通消息

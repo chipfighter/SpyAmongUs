@@ -17,11 +17,17 @@
         </div>
         <div class="user-name">
           {{ user.username || user.username }}
-          <span v-if="readyUsers.includes(user.id)" class="ready-badge">准备</span>
+          <!-- 仅在游戏未开始且正在轮询上帝之前显示准备状态 -->
+          <span v-if="readyUsers.includes(user.id) && !gameStarted && !isGodPolling" class="ready-badge">准备</span>
+          
+          <!-- 添加身份显示，仅在游戏已开始且分配了角色后显示 -->
+          <span v-if="gameStarted && roles && shouldShowRole(user.id)" class="role-badge" :class="getRoleClass(user.id)">
+            {{ getRoleName(user.id) }}
+          </span>
         </div>
         
         <!-- 用户操作按钮组 - 只对非当前用户显示 -->
-        <div v-if="selectedUserId === user.id && user.id !== currentUserId" class="user-actions">
+        <div v-if="selectedUserId === user.id && user.id !== currentUserId && !gameStarted" class="user-actions">
           <button class="action-btn" title="添加好友" @click.stop="emit('add-friend', user.id)">
             <i class="action-icon">👥</i>
             <span class="action-text">添加好友</span>
