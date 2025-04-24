@@ -367,7 +367,79 @@ export const useRoomStore = defineStore('room', {
     // --- State Management ---
     clearRoomState() {
       console.log('[RoomStore] Clearing room state');
+      // 重置为默认状态
       Object.assign(this, getDefaultState());
+    },
+    
+    // 处理上帝角色询问
+    setGodRoleInquiry(visible, message, timeout) {
+      console.log(`[RoomStore] 设置上帝角色询问: visible=${visible}, message=${message}, timeout=${timeout}`);
+      
+      // 直接使用自定义事件触发弹窗显示，移除对$toast的依赖
+      if (visible) {
+        // 触发RoomView组件中的显示询问弹窗
+        document.dispatchEvent(new CustomEvent('god-role-inquiry', { 
+          detail: { visible, message, timeout } 
+        }));
+      } else {
+        // 关闭询问弹窗
+        document.dispatchEvent(new CustomEvent('god-role-inquiry', { 
+          detail: { visible: false } 
+        }));
+        
+        // 关闭询问状态弹窗
+        document.dispatchEvent(new CustomEvent('god-role-inquiry-status', { 
+          detail: { visible: false } 
+        }));
+      }
+    },
+    
+    // 处理上帝角色询问状态广播
+    handleGodRoleInquiryStatus(data) {
+      console.log('[RoomStore] 处理上帝角色询问状态广播:', data);
+      
+      const userStore = useUserStore();
+      const isCurrentUser = userStore.user?.id === data.current_user;
+      
+      // 如果不是当前用户，显示弹窗
+      if (!isCurrentUser) {
+        // 通过触发事件来显示状态弹窗（类似于上帝选词状态弹窗）
+        document.dispatchEvent(new CustomEvent('god-role-inquiry-status', { 
+          detail: { 
+            visible: true, 
+            message: data.message || `正在询问玩家是否愿意担任上帝...`,
+            timeout: data.timeout || 7,
+            username: data.username || ''
+          } 
+        }));
+        
+        // 同时也显示Toast提示
+        this.showToast('info', data.message || `正在询问 ${data.username} 是否愿意担任上帝...`);
+      }
+    },
+    
+    // 显示Toast消息
+    showToast(type, message) {
+      console.log(`[RoomStore] 显示Toast: ${type} - ${message}`);
+      
+      // 如果使用Vue组件，尝试使用其$toast API
+      // 注意：Vue实例上可能未挂载$toast
+      try {
+        if (window?.$toast) {
+          window.$toast[type](message);
+        } else {
+          // 降级处理：仅记录日志
+          console.log(`[Toast] ${type}: ${message}`);
+          
+          // 为了确保用户体验，将消息通过事件分发给RoomView组件自行处理
+          document.dispatchEvent(new CustomEvent('room-toast', { 
+            detail: { type, message } 
+          }));
+        }
+      } catch (error) {
+        console.error('[RoomStore] 显示Toast失败:', error);
+        console.log(`[Toast Fallback] ${type}: ${message}`);
+      }
     },
   },
   getters: {

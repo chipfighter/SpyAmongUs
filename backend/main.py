@@ -20,6 +20,7 @@ Note:
 import time
 import json
 import asyncio
+import logging
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -43,10 +44,14 @@ from config import (
 )
 from utils.websocket_manager import WebSocketManager
 from services.message_service import MessageService
+from services.game_service import GameService
 
 # 配置日志（当前根路径是）
 setup_logger("SpyAmongUs")
 logger = get_logger(__name__)
+
+game_service_logger = setup_logger("services.game_service", level=logging.DEBUG)
+debug_logger = setup_logger("debug", level=logging.DEBUG, log_file="game_debug.log")
 
 # 数据模型
 class UserRegister(BaseModel):
@@ -67,9 +72,10 @@ class TokenRefresh(BaseModel):
 app = FastAPI(title="SpyAmongUs API", debug=DEBUG)
 
 origins = [
-    "http://localhost:5173",  # 前端开发服务器
+    "http://localhost:5173",  # 前端本地开发服务器
     # 如果部署后前端地址不同，也需要添加
     # 例如: "http://your-frontend-domain.com"
+    # 前端放到CDN上也需要注意CORS跨域问题
 ]
 
 app.add_middleware(
@@ -182,6 +188,9 @@ async def startup_event():
         if not redis_status["connected"]:
             logger.error(f"Redis连接失败: {redis_status['error']}")
             raise Exception("Redis连接失败")
+
+        # 注意: GameService已在RoomService初始化时创建
+        logger.info("RoomService中的GameService已初始化")
 
         logger.info("应用初始化成功")
 
@@ -382,6 +391,24 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             "type": "pong",
                             "timestamp": int(time.time() * 1000)
                         })
+                        continue
+                    
+                    # 处理上帝角色回应消息
+                    if message_data.get("type") == "god_role_response":
+                        logger.info(f"处理上帝角色回应: {message_data}")
+                        await room_service.game_service.handle_god_response(user_id, message_data)
+                        continue
+                    
+                    # 处理上帝选词消息
+                    if message_data.get("type") == "god_words_selected":
+                        logger.info(f"处理上帝选词: {message_data}")
+                        # TODO:游戏初始化
+                        continue
+                    
+                    # 处理上帝选词超时消息
+                    if message_data.get("type") == "god_words_selection_timeout":
+                        logger.info(f"处理上帝选词超时: {message_data}")
+                        # TODO:直接AI选词
                         continue
                     
                     # 处理所有普通消息

@@ -113,6 +113,41 @@
     <!-- 倒计时动画组件 -->
     <CountdownOverlay ref="countdownOverlay" @cancel-ready="handleCancelReady" />
 
+    <!-- 上帝角色询问弹窗 -->
+    <GodRoleInquiryModal
+      :visible="showGodRoleInquiry"
+      :message="godRoleInquiryMessage"
+      :timeout="godRoleInquiryTimeout"
+      @accept="handleAcceptGodRole"
+      @decline="handleDeclineGodRole"
+      @timeout="handleGodRoleTimeout"
+    />
+
+    <!-- 上帝角色询问状态弹窗（给普通用户显示） -->
+    <GodRoleInquiryStatusModal
+      :visible="showGodRoleInquiryStatus"
+      :message="godRoleInquiryStatusMessage"
+      :timeout="godRoleInquiryStatusTimeout"
+      :username="godRoleInquiryStatusUsername"
+    />
+
+    <!-- 上帝选词弹窗 -->
+    <GodWordSelectionModal
+      :visible="showGodWordSelection"
+      :message="godWordSelectionMessage"
+      :timeout="godWordSelectionTimeout"
+      @confirm="handleGodWordSelectionConfirm"
+      @timeout="handleGodWordSelectionTimeout"
+    />
+
+    <!-- 上帝选词状态弹窗（给普通用户显示） -->
+    <GodWordSelectionStatusModal
+      :visible="showGodWordSelectionStatus"
+      :message="godWordSelectionStatusMessage"
+      :timeout="godWordSelectionStatusTimeout"
+      :godUsername="godWordSelectionStatusUsername"
+    />
+
     <!-- 错误提示模态框 -->
     <div v-if="roomStore.error" class="error-modal-overlay">
       <div class="error-modal">
@@ -148,6 +183,10 @@ import { useWebsocketStore } from '@/stores/websocket.js'; // --- 导入 websock
 import { useChatStore } from '@/stores/chat.js'; // --- 导入 chatStore ---
 import { useRoomStore } from '@/stores/room.js'; // --- 导入 roomStore ---
 import CountdownOverlay from '@/components/Room/CountdownOverlay.vue'; // --- 导入 CountdownOverlay 组件 ---
+import GodRoleInquiryModal from '@/components/Room/GodRoleInquiryModal.vue'; // --- 导入 GodRoleInquiryModal 组件 ---
+import GodWordSelectionModal from '@/components/Room/GodWordSelectionModal.vue'; // --- 导入 GodWordSelectionModal 组件 ---
+import GodWordSelectionStatusModal from '@/components/Room/GodWordSelectionStatusModal.vue'; // --- 导入 GodWordSelectionStatusModal 组件 ---
+import GodRoleInquiryStatusModal from '@/components/Room/GodRoleInquiryStatusModal.vue'; // --- 导入 GodRoleInquiryStatusModal 组件 ---
 
 export default {
   name: 'RoomView',
@@ -161,7 +200,11 @@ export default {
     FloatingBall,
     MiniChat,
     RoomSidebar,
-    CountdownOverlay
+    CountdownOverlay,
+    GodRoleInquiryModal,
+    GodWordSelectionModal,
+    GodWordSelectionStatusModal,
+    GodRoleInquiryStatusModal
   },
   setup() {
     const route = useRoute();
@@ -207,7 +250,21 @@ export default {
       newSecretMessage: '',
       ws: null,
       isConnected: false,
-      pingTimer: null
+      pingTimer: null,
+      showGodRoleInquiry: false,
+      godRoleInquiryMessage: '',
+      godRoleInquiryTimeout: 7,
+      showGodRoleInquiryStatus: false,
+      godRoleInquiryStatusMessage: '',
+      godRoleInquiryStatusTimeout: 7,
+      godRoleInquiryStatusUsername: '',
+      showGodWordSelection: false,
+      godWordSelectionMessage: '',
+      godWordSelectionTimeout: 7,
+      showGodWordSelectionStatus: false,
+      godWordSelectionStatusMessage: '',
+      godWordSelectionStatusTimeout: 7,
+      godWordSelectionStatusUsername: ''
     }
   },
   computed: {
@@ -294,10 +351,23 @@ export default {
         this.router.push('/lobby'); // 暂时保留跳转逻辑
     } 
     // --- WebSocket 连接逻辑已移除 ---
+    
+    // 添加自定义事件监听器来处理上帝角色询问
+    document.addEventListener('god-role-inquiry', this.handleGodRoleInquiryEvent);
+    
+    // 添加上帝角色询问状态事件监听器
+    document.addEventListener('god-role-inquiry-status', this.handleGodRoleInquiryStatusEvent);
+    
+    // 添加Toast消息事件监听
+    document.addEventListener('room-toast', this.handleRoomToastEvent);
   },
   mounted() {
     // Mounted hook is now empty, connection logic moved to watcher
     console.log("[RoomView Mounted] Hook executed. Waiting for roomInfo to connect WebSocket.");
+    
+    // 添加事件监听
+    document.addEventListener('god-words-selection', this.handleGodWordSelectionEvent);
+    document.addEventListener('god-words-selected', this.handleGodWordsSelectedEvent);
   },
   watch: {
     // Watch the roomInfo computed property
@@ -342,6 +412,19 @@ export default {
       console.log('[RoomView] 临时返回大厅，保持WebSocket连接');
       // 不清除房间状态，保持连接
     }
+    
+    // 移除事件监听器
+    document.removeEventListener('god-role-inquiry', this.handleGodRoleInquiryEvent);
+    
+    // 移除上帝角色询问状态事件监听器
+    document.removeEventListener('god-role-inquiry-status', this.handleGodRoleInquiryStatusEvent);
+    
+    // 移除Toast消息事件监听
+    document.removeEventListener('room-toast', this.handleRoomToastEvent);
+    
+    // 移除上帝选词相关事件监听
+    document.removeEventListener('god-words-selection', this.handleGodWordSelectionEvent);
+    document.removeEventListener('god-words-selected', this.handleGodWordsSelectedEvent);
   },
   methods: {
     async handleLeaveRoom() {
@@ -695,7 +778,271 @@ export default {
       };
       
       this.websocketStore.sendMessage(message);
-    }
+    },
+    handleAcceptGodRole() {
+      console.log('[RoomView] 用户接受上帝角色');
+      // 处理用户接受上帝角色的逻辑
+      this.websocketStore.sendMessage({
+        type: 'god_role_response',
+        accept: true
+      });
+      this.showGodRoleInquiry = false;
+      // 关闭所有玩家的状态弹窗 - 由服务器触发 god_role_assigned 消息
+    },
+    handleDeclineGodRole() {
+      console.log('[RoomView] 用户拒绝上帝角色');
+      // 处理用户拒绝上帝角色的逻辑
+      this.websocketStore.sendMessage({
+        type: 'god_role_response',
+        accept: false
+      });
+      this.showGodRoleInquiry = false;
+      // 关闭所有玩家的状态弹窗 - 由服务器触发 god_role_assigned 消息
+    },
+    handleGodRoleTimeout() {
+      console.log('[RoomView] 上帝角色询问超时');
+      // 处理上帝角色询问超时的逻辑
+      // 超时视为拒绝
+      this.websocketStore.sendMessage({
+        type: 'god_role_response',
+        accept: false,
+        is_timeout: true
+      });
+      this.showGodRoleInquiry = false;
+      // 关闭所有玩家的状态弹窗 - 由服务器触发 god_role_assigned 消息
+    },
+    // 处理收到的WebSocket消息
+    handleReceivedMessage(message) {
+      try {
+        console.log('[RoomView] 接收到WS消息:', message);
+        const data = typeof message === 'string' ? JSON.parse(message) : message;
+
+        // 处理不同类型的消息
+        switch(data.type) {
+          // 其他case...
+          
+          // 处理上帝角色询问
+          case 'god_role_inquiry':
+            this.showGodRoleInquiry = true;
+            this.godRoleInquiryMessage = data.message || '您愿意担任本局游戏的上帝吗？';
+            this.godRoleInquiryTimeout = data.timeout || 7;
+            break;
+            
+          // 处理上帝角色询问状态广播
+          case 'god_role_inquiry_status':
+            // 判断是否是当前用户
+            if (data.current_user === this.currentUser?.id) {
+              // 是当前用户，弹窗已经显示
+              console.log('[RoomView] 当前正在询问我是否愿意担任上帝');
+            }
+            // 其他用户的状态更新由事件处理系统处理
+            break;
+            
+          // 处理上帝角色分配结果
+          case 'god_role_assigned':
+            this.showGodRoleInquiry = false; // 关闭询问弹窗
+            this.showGodRoleInquiryStatus = false; // 关闭状态弹窗
+            
+            if (data.is_ai) {
+              this.showNotification('info', '没有玩家愿意担任上帝，本局游戏将由AI担任上帝角色');
+            } else {
+              this.showNotification('success', '已选定上帝角色，游戏即将开始');
+            }
+            break;
+            
+          // 处理被选为上帝的通知
+          case 'you_are_god':
+            this.showNotification('success', '您已被选为本局游戏的上帝');
+            break;
+          
+          // 处理上帝选词阶段（给上帝显示）
+          case 'god_words_selection':
+            // 先确保所有询问弹窗关闭
+            this.showGodRoleInquiry = false;
+            this.showGodRoleInquiryStatus = false;
+            
+            // 添加小延迟，确保前一个弹窗有时间关闭
+            setTimeout(() => {
+              // 检查是否有god_user_id字段，如果没有说明当前用户是上帝
+              if (!data.god_user_id) {
+                // 当前用户是上帝，显示选词弹窗
+                this.showGodWordSelection = true;
+                this.godWordSelectionMessage = data.message || '请选择双方词语。';
+                this.godWordSelectionTimeout = data.timeout || 30;
+              } else {
+                // 当前用户不是上帝，显示等待状态
+                this.showGodWordSelectionStatus = true;
+                this.godWordSelectionStatusMessage = data.message || '正在选词。';
+                this.godWordSelectionStatusTimeout = data.timeout || 30;
+                this.godWordSelectionStatusUsername = data.username || '';
+              }
+            }, 150); // 添加150毫秒延迟
+            break;
+            
+          // 处理选词完成
+          case 'god_words_selected':
+            this.showGodWordSelection = false;
+            this.showGodWordSelectionStatus = false;
+            this.showNotification('success', '词语选择完成，游戏开始！');
+            break;
+          
+          // 处理更多消息类型...
+          
+          default:
+            // 处理其他类型的消息
+            console.log('[RoomView] 未处理的消息类型:', data.type);
+        }
+      } catch (error) {
+        console.error('[RoomView] 处理WS消息时出错:', error);
+      }
+    },
+    // 处理来自RoomStore的上帝角色询问事件
+    handleGodRoleInquiryEvent(event) {
+      console.log('[RoomView] 收到上帝角色询问事件:', event.detail);
+      
+      // 获取事件详情
+      const { visible, message, timeout } = event.detail;
+      
+      // 更新组件状态
+      this.showGodRoleInquiry = visible;
+      if (visible) {
+        this.godRoleInquiryMessage = message || '您愿意担任本局游戏的上帝吗？';
+        this.godRoleInquiryTimeout = timeout || 7;
+      }
+    },
+    // 处理来自RoomStore的上帝角色询问状态事件
+    handleGodRoleInquiryStatusEvent(event) {
+      console.log('[RoomView] 收到上帝角色询问状态事件:', event.detail);
+      
+      // 获取事件详情
+      const { visible, message, timeout, username } = event.detail;
+      
+      // 更新组件状态
+      this.showGodRoleInquiryStatus = visible;
+      if (visible) {
+        this.godRoleInquiryStatusMessage = message || '正在询问玩家是否愿意担任上帝...';
+        this.godRoleInquiryStatusTimeout = timeout || 7;
+        this.godRoleInquiryStatusUsername = username || '';
+      }
+    },
+    // 处理来自RoomStore的Toast消息事件
+    handleRoomToastEvent(event) {
+      console.log('[RoomView] 收到房间Toast事件:', event.detail);
+      
+      // 获取事件详情
+      const { type, message } = event.detail;
+      
+      // 使用自己的通知方法
+      this.showNotification(type, message);
+    },
+    
+    // 处理上帝选词事件
+    handleGodWordSelectionEvent(event) {
+      console.log('[RoomView] 收到上帝选词事件:', event.detail);
+      
+      // 先确保所有询问弹窗关闭
+      this.showGodRoleInquiry = false;
+      this.showGodRoleInquiryStatus = false;
+      
+      // 添加小延迟，确保前一个弹窗有时间关闭
+      setTimeout(() => {
+        const data = event.detail;
+        
+        // 判断是否是当前用户是上帝
+        if (!data.god_user_id) {
+          // 当前用户是上帝，显示选词弹窗
+          this.showGodWordSelection = true;
+          this.godWordSelectionMessage = data.message || '请选择双方词语。';
+          this.godWordSelectionTimeout = data.timeout || 30;
+        } else {
+          // 当前用户不是上帝，显示等待状态
+          this.showGodWordSelectionStatus = true;
+          this.godWordSelectionStatusMessage = data.message || '正在选词。';
+          this.godWordSelectionStatusTimeout = data.timeout || 30;
+          this.godWordSelectionStatusUsername = data.username || '';
+        }
+      }, 150); // 添加150毫秒延迟
+    },
+    
+    // 处理上帝选词完成事件
+    handleGodWordsSelectedEvent(event) {
+      console.log('[RoomView] 收到上帝选词完成事件:', event.detail);
+      
+      // 关闭所有选词相关弹窗
+      this.showGodWordSelection = false;
+      this.showGodWordSelectionStatus = false;
+      
+      // 显示成功提示
+      this.showNotification('success', '词语选择完成，游戏开始！');
+    },
+    
+    // 添加通知显示方法
+    showNotification(type, message) {
+      // 记录消息
+      console.log(`[RoomView Notification] ${type}: ${message}`);
+      
+      // 创建通知元素
+      const notification = document.createElement('div');
+      notification.className = `room-notification ${type}`;
+      notification.innerHTML = `
+        <div class="notification-content">
+          <span class="notification-icon">${type === 'success' ? '✅' : type === 'warning' ? '⚠️' : type === 'error' ? '❌' : 'ℹ️'}</span>
+          <span class="notification-message">${message}</span>
+        </div>
+      `;
+      
+      // 添加到DOM
+      document.body.appendChild(notification);
+      
+      // 添加进入动画
+      setTimeout(() => {
+        notification.classList.add('show');
+      }, 10);
+      
+      // 设置自动移除
+      setTimeout(() => {
+        notification.classList.remove('show');
+        notification.classList.add('hide');
+        
+        // 动画结束后移除元素
+        setTimeout(() => {
+          if (notification.parentNode) {
+            notification.parentNode.removeChild(notification);
+          }
+        }, 300);
+      }, 5000);
+    },
+    // 处理上帝选词确认
+    handleGodWordSelectionConfirm(wordsData) {
+      console.log('[RoomView] 用户确认选词:', wordsData);
+      // TODO: 后续实现上帝选词传给后端的逻辑
+      // this.websocketStore.sendMessage({
+      //   type: 'god_words_selected',
+      //   team_one_words: wordsData.teamOne,
+      //   team_two_words: wordsData.teamTwo
+      // });
+      
+      // 关闭选词弹窗
+      this.showGodWordSelection = false;
+      
+      // 显示成功提示
+      this.showNotification('success', '词语选择完成！等待游戏开始...');
+    },
+    
+    // 处理上帝选词超时
+    handleGodWordSelectionTimeout() {
+      console.log('[RoomView] 选词超时');
+      // TODO: 后续实现选词超时通知后端的逻辑
+      // this.websocketStore.sendMessage({
+      //   type: 'god_words_selection_timeout'
+      // });
+      
+      // 关闭选词弹窗
+      this.showGodWordSelection = false;
+      
+      // 显示超时提示
+      this.showNotification('warning', '选词超时！系统将重新询问上帝角色...');
+    },
   }
 }
 </script>
@@ -819,5 +1166,70 @@ export default {
   border: none;
   border-radius: 4px;
   cursor: pointer;
+}
+
+/* 全局通知样式 */
+.room-notification {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  padding: 12px 20px;
+  border-radius: 8px;
+  min-width: 280px;
+  max-width: 400px;
+  z-index: 2000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transform: translateY(-20px);
+  opacity: 0;
+  transition: all 0.3s ease;
+}
+
+.room-notification.show {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.room-notification.hide {
+  transform: translateY(-20px);
+  opacity: 0;
+}
+
+.room-notification .notification-content {
+  display: flex;
+  align-items: center;
+}
+
+.room-notification .notification-icon {
+  margin-right: 12px;
+  font-size: 18px;
+}
+
+.room-notification .notification-message {
+  flex: 1;
+}
+
+/* 通知类型样式 */
+.room-notification.info {
+  background-color: #e6f7ff;
+  border-left: 5px solid #1890ff;
+  color: #0050b3;
+}
+
+.room-notification.success {
+  background-color: #f6ffed;
+  border-left: 5px solid #52c41a;
+  color: #389e0d;
+}
+
+.room-notification.warning {
+  background-color: #fffbe6;
+  border-left: 5px solid #faad14;
+  color: #d48806;
+}
+
+.room-notification.error {
+  background-color: #fff2f0;
+  border-left: 5px solid #ff4d4f;
+  color: #cf1322;
 }
 </style> 

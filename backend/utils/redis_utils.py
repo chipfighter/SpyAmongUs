@@ -34,8 +34,9 @@ TODO:
 """
 
 import time
-from typing import Optional, Set, Dict, Any
+from typing import Optional, Set, Dict, Any, List
 import redis.asyncio as redis
+import json
 
 from models.message import Message
 from utils.logger_utils import get_logger
@@ -47,7 +48,7 @@ from config import (
     ROOM_ROLES_KEY_PREFIX, ROOM_MESSAGES_KEY_PREFIX,
     ROOM_SECRET_CHAT_MESSAGES_KEY_PREFIX, ROOM_VOTES_KEY_PREFIX,
     ROOM_SECRET_VOTES_KEY_PREFIX, JWT_ACCESS_TOKEN_EXPIRE_MINUTES, MIN_PLAYERS, MIN_SPY_COUNT, MAX_SPEAK_TIME,
-    MAX_LAST_WORDS_TIME, MAX_ROUNDS
+    MAX_LAST_WORDS_TIME, MAX_ROUNDS, ROOM_POLL_STATE_KEY_PREFIX
 )
 
 logger = get_logger(__name__)
@@ -557,3 +558,63 @@ class RedisClient:
         except Exception as e:
             logger.error(f"获取秘密房间的消息列表失败: {e}")
             return []
+
+    # 轮询状态相关
+    async def set_poll_state(self, invite_code: str, poll_state: dict) -> bool:
+        """
+        存储轮询状态到Redis
+        
+        Args:
+            invite_code: 房间邀请码
+            poll_state: 轮询状态字典，包含current_index, player_list, trace_id等
+            
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            key = ROOM_POLL_STATE_KEY_PREFIX % invite_code
+            # 将状态字典序列化为JSON字符串
+            poll_state_json = json.dumps(poll_state)
+            await self._redis.set(key, poll_state_json)
+            return True
+        except Exception as e:
+            logger.error(f"存储房间 {invite_code} 的轮询状态失败: {str(e)}")
+            return False
+            
+    async def get_poll_state(self, invite_code: str) -> Optional[dict]:
+        """
+        从Redis获取轮询状态
+        
+        Args:
+            invite_code: 房间邀请码
+            
+        Returns:
+            Optional[dict]: 轮询状态字典，如果不存在则返回None
+        """
+        try:
+            key = ROOM_POLL_STATE_KEY_PREFIX % invite_code
+            poll_state_json = await self._redis.get(key)
+            if poll_state_json:
+                return json.loads(poll_state_json)
+            return None
+        except Exception as e:
+            logger.error(f"获取房间 {invite_code} 的轮询状态失败: {str(e)}")
+            return None
+            
+    async def delete_poll_state(self, invite_code: str) -> bool:
+        """
+        删除Redis中的轮询状态
+        
+        Args:
+            invite_code: 房间邀请码
+            
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            key = ROOM_POLL_STATE_KEY_PREFIX % invite_code
+            await self._redis.delete(key)
+            return True
+        except Exception as e:
+            logger.error(f"删除房间 {invite_code} 的轮询状态失败: {str(e)}")
+            return False

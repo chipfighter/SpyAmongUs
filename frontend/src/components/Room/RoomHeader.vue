@@ -84,9 +84,12 @@ defineEmits([
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 20px;
-  background-color: #ffffff;
+  padding: 15px 20px;
+  background-color: white;
+  border-bottom: 1px solid #e0e0e0;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  position: relative;
+  z-index: 1000; /* 设置为和遮罩相同的值，这样容器本身不会显示 */
 }
 
 .room-title {
@@ -142,6 +145,12 @@ defineEmits([
   color: red;
 }
 
+.room-actions {
+  position: relative;
+  z-index: 1000; /* 设置为和遮罩相同的值，这样容器本身不会显示 */
+}
+
+/* 退出房间按钮样式 */
 .exit-button {
   padding: 8px 16px;
   background-color: #eaeaea;
@@ -150,25 +159,20 @@ defineEmits([
   color: #333;
   cursor: pointer;
   transition: all 0.3s;
+  position: relative;
+  z-index: 2000; /* 设置比遮罩层更高的值，确保按钮可见和可点击 */
 }
 
 .exit-button:hover {
   background-color: #e0e0e0;
 }
 
-.host-exit { /* 这个类名似乎没用到，但保留以防万一 */
-  background-color: #ff4d4f;
-  color: white;
-}
-
-.host-exit:hover { /* 这个类名似乎没用到 */
-  background-color: #ff7875;
-}
-
 /* 房主退出(移交)按钮样式 */
 .exit-button.host-leave {
   background-color: #FFA726; /* 橙色 */
   color: white;
+  position: relative;
+  z-index: 2000; /* 设置比遮罩层更高的值，确保按钮可见和可点击 */
 }
 
 .exit-button.host-leave:hover {
@@ -179,14 +183,12 @@ defineEmits([
 .exit-button.host-disband {
   background-color: #EF5350; /* 红色 */
   color: white;
-  /* margin-left: 8px;  <-- 之前的行内样式现在移到这里 */
+  margin-left: 8px;
+  position: relative;
+  z-index: 2000; /* 设置比遮罩层更高的值，确保按钮可见和可点击 */
 }
 
-.exit-button.host-disband:hover {
-  background-color: #E57373;
-}
-
-/* 返回大厅按钮样式 (从 RoomView.vue 迁移) */
+/* 返回大厅按钮样式 */
 .back-to-lobby-button {
   padding: 8px 16px;
   background-color: #1890ff;
@@ -196,10 +198,32 @@ defineEmits([
   cursor: pointer;
   transition: all 0.3s;
   margin-right: 10px; /* 保持与退出按钮的间距 */
+  position: relative;
+  z-index: 1000; /* 确保在倒计时遮罩下方，不可点击 */
 }
 
 .back-to-lobby-button:hover {
   background-color: #40a9ff;
+}
+
+.actions-area {
+  display: flex;
+  align-items: center;
+  position: relative;
+  z-index: 2001; /* 确保按钮在最上层 */
+}
+
+.host-exit { 
+  background-color: #ff4d4f;
+  color: white;
+}
+
+.host-exit:hover {
+  background-color: #ff7875;
+}
+
+.exit-button.host-disband:hover {
+  background-color: #E57373;
 }
 
 </style> 

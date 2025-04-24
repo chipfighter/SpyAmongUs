@@ -395,6 +395,46 @@ export const useWebsocketStore = defineStore('websocket', {
               roomStore.setHost(data.new_host_id);
             }
             break;
+        case 'god_role_inquiry':
+            // 处理上帝角色询问消息
+            console.log('[WS] 收到上帝角色询问:', data);
+            roomStore.setGodRoleInquiry(true, data.message, data.timeout);
+            break;
+        case 'god_role_inquiry_status':
+            // 处理上帝角色询问状态广播
+            console.log('[WS] 收到上帝角色询问状态:', data);
+            roomStore.handleGodRoleInquiryStatus(data);
+            break;
+        case 'god_role_assigned':
+            // 处理上帝角色分配结果
+            console.log('[WS] 上帝角色已分配:', data);
+            roomStore.setGodRoleInquiry(false);
+            if (data.is_ai) {
+                roomStore.showToast('info', '没有玩家愿意担任上帝，本局游戏将由AI担任上帝角色');
+            } else {
+                roomStore.showToast('success', '已选定上帝角色，游戏即将开始');
+            }
+            break;
+        case 'you_are_god':
+            // 处理被选为上帝的通知
+            console.log('[WS] 您被选为上帝角色');
+            roomStore.showToast('success', '您已被选为本局游戏的上帝');
+            break;
+        case 'god_words_selection':
+            // 处理上帝选词消息
+            console.log('[WS] 收到上帝选词消息:', data);
+            // 通过事件系统将消息传递给组件
+            document.dispatchEvent(new CustomEvent('god-words-selection', { 
+              detail: data
+            }));
+            break;
+        case 'god_words_selected':
+            // 处理选词完成消息
+            console.log('[WS] 上帝选词完成:', data);
+            document.dispatchEvent(new CustomEvent('god-words-selected', { 
+              detail: data
+            }));
+            break;
           default:
           console.warn('[WS] 未处理的消息类型:', data.type);
       }

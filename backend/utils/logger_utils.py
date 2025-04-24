@@ -35,7 +35,7 @@ def setup_logger(name: str, level: int = logging.INFO, log_file: Optional[str] =
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
 
-        # 控制台输出
+        # 配置handler控制台输出
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(formatter)
         logger.addHandler(stream_handler)

@@ -23,6 +23,8 @@ ROOM_USERS_KEY_PREFIX = "room:%s:users"  # Set| 房间用户id集合
 ROOM_READY_USERS_KEY_PREFIX = "room:%s:ready_users"  # Set| 准备用户id集合
 ROOM_ALIVE_PLAYERS_KEY_PREFIX = "room:%s:alive_players"  # Set| 存活玩家id集合
 ROOM_ROLES_KEY_PREFIX = "room:%s:roles"  # Hash| 用户角色映射，{user_id: role}
+# 轮询状态相关
+ROOM_POLL_STATE_KEY_PREFIX = "room:%s:poll_state"  # String| 轮询上帝状态的JSON
 # 房间消息相关
 ROOM_MESSAGES_KEY_PREFIX = "room:%s:messages"  # List| 房间消息列表
 ROOM_SECRET_CHAT_MESSAGES_KEY_PREFIX = "room:%s:secret_chat:messages"  # List| 秘密聊天消息

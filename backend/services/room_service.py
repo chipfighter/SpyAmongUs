@@ -23,9 +23,10 @@ from services.user_service import UserService
 from utils.redis_utils import RedisClient
 from utils.logger_utils import get_logger
 from utils.websocket_manager import WebSocketManager
+from services.game_service import GameService
 from config import (
     MIN_PLAYERS, MIN_SPY_COUNT, MAX_ROUNDS, MAX_SPEAK_TIME, MAX_LAST_WORDS_TIME, USER_STATUS_ONLINE,
-    USER_STATUS_IN_ROOM, GAME_STATUS_WAITING
+    USER_STATUS_IN_ROOM, GAME_STATUS_WAITING, ROOM_POLL_STATE_KEY_PREFIX
 )
 import asyncio
 from pydantic import ValidationError
@@ -40,6 +41,8 @@ class RoomService:
         self.websocket_manager = websocket_manager
         self.message_service = None
         self.countdown_tasks = {}  # 房间ID -> asyncio任务的映射
+        self.game_service = GameService(self.redis_client, self.websocket_manager)
+
 
     def set_message_service(self, message_service):
         """设置消息服务，避免循环依赖"""
@@ -206,6 +209,10 @@ class RoomService:
                 await self.user_service.update_user_status(user_id, USER_STATUS_ONLINE)
                 # 清除用户当前房间
                 await self.user_service.update_current_room(user_id, None)
+
+            # 删除轮询状态
+            await self.redis_client.delete_poll_state(invite_code)
+            logger.info(f"已清理房间 {invite_code} 的轮询状态")
 
             # 删除Redis中的房间数据
             success = await self.redis_client.delete_room(invite_code)
@@ -863,7 +870,8 @@ class RoomService:
             # 等待倒计时结束
             await asyncio.sleep(countdown_duration)
 
-        # TODO:初始化游戏开始的调用+进一步操作，放在game_service中实现
+            # 调用GameService开始轮询上帝
+            await self.game_service.poll_god_role(invite_code)
             
         except asyncio.CancelledError:
             logger.info(f"房间 {invite_code} 倒计时被取消")
