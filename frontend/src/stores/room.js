@@ -386,11 +386,6 @@ export const useRoomStore = defineStore('room', {
         document.dispatchEvent(new CustomEvent('god-role-inquiry', { 
           detail: { visible: false } 
         }));
-        
-        // 关闭询问状态弹窗
-        document.dispatchEvent(new CustomEvent('god-role-inquiry-status', { 
-          detail: { visible: false } 
-        }));
       }
     },
     
@@ -401,20 +396,22 @@ export const useRoomStore = defineStore('room', {
       const userStore = useUserStore();
       const isCurrentUser = userStore.user?.id === data.current_user;
       
-      // 如果不是当前用户，显示弹窗
+      // 如果不是当前用户，则触发事件显示询问状态弹窗
       if (!isCurrentUser) {
-        // 通过触发事件来显示状态弹窗（类似于上帝选词状态弹窗）
+        // 显示toast提示
+        if (data.message) {
+          this.showToast('info', data.message);
+        }
+        
+        // 触发事件显示询问状态弹窗
         document.dispatchEvent(new CustomEvent('god-role-inquiry-status', { 
           detail: { 
             visible: true, 
-            message: data.message || `正在询问玩家是否愿意担任上帝...`,
-            timeout: data.timeout || 7,
-            username: data.username || ''
+            message: data.message || '正在询问玩家是否愿意担任上帝...', 
+            timeout: data.timeout || 7, 
+            username: data.username || '' 
           } 
         }));
-        
-        // 同时也显示Toast提示
-        this.showToast('info', data.message || `正在询问 ${data.username} 是否愿意担任上帝...`);
       }
     },
     

@@ -402,13 +402,39 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     # 处理上帝选词消息
                     if message_data.get("type") == "god_words_selected":
                         logger.info(f"处理上帝选词: {message_data}")
-                        # TODO:游戏初始化
+                        # 获取词语数据
+                        team_one_words = message_data.get("team_one_words", [])
+                        team_two_words = message_data.get("team_two_words", [])
+                        
+                        # 广播消息给所有玩家，通知他们上帝已选词
+                        await websocket_manager.broadcast_message(
+                            room_id,
+                            {
+                                "type": "god_words_selected",
+                                "message": "上帝已选择词语，游戏正在初始化...",
+                                "timestamp": int(time.time() * 1000)
+                            },
+                            is_special=False
+                        )
+                        
+                        # TODO: 游戏初始化（后续实现）
                         continue
                     
                     # 处理上帝选词超时消息
                     if message_data.get("type") == "god_words_selection_timeout":
                         logger.info(f"处理上帝选词超时: {message_data}")
-                        # TODO:直接AI选词
+                        # 广播消息给所有玩家
+                        await websocket_manager.broadcast_message(
+                            room_id,
+                            {
+                                "type": "god_words_selection_timeout",
+                                "message": "上帝选词超时，由场外AI模拟上帝",
+                                "timestamp": int(time.time() * 1000)
+                            },
+                            is_special=False
+                        )
+                        
+                        # TODO: 直接AI选词（后续实现）
                         continue
                     
                     # 处理所有普通消息

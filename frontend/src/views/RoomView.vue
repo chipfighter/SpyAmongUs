@@ -163,6 +163,13 @@
         </div>
       </div>
     </div>
+
+    <!-- 游戏加载动画 -->
+    <GameLoadingOverlay 
+      :visible="showGameLoading" 
+      :title="gameLoadingTitle"
+      :message="gameLoadingMessage"
+    />
   </div>
 </template>
 
@@ -187,6 +194,7 @@ import GodRoleInquiryModal from '@/components/Room/GodRoleInquiryModal.vue'; // 
 import GodWordSelectionModal from '@/components/Room/GodWordSelectionModal.vue'; // --- 导入 GodWordSelectionModal 组件 ---
 import GodWordSelectionStatusModal from '@/components/Room/GodWordSelectionStatusModal.vue'; // --- 导入 GodWordSelectionStatusModal 组件 ---
 import GodRoleInquiryStatusModal from '@/components/Room/GodRoleInquiryStatusModal.vue'; // --- 导入 GodRoleInquiryStatusModal 组件 ---
+import GameLoadingOverlay from '@/components/Room/GameLoadingOverlay.vue';
 
 export default {
   name: 'RoomView',
@@ -204,7 +212,8 @@ export default {
     GodRoleInquiryModal,
     GodWordSelectionModal,
     GodWordSelectionStatusModal,
-    GodRoleInquiryStatusModal
+    GodRoleInquiryStatusModal,
+    GameLoadingOverlay
   },
   setup() {
     const route = useRoute();
@@ -217,7 +226,12 @@ export default {
     // --- 将 roomStore 的状态和方法映射到组件中 ---
     // 如果完全使用 Composition API，可以在这里解构或返回需要的 state/actions
     
-    return { route, router, userStore, websocketStore, chatStore, roomStore }; // --- 返回 roomStore ---
+    // 游戏加载状态
+    const showGameLoading = ref(false);
+    const gameLoadingTitle = ref('游戏初始化中');
+    const gameLoadingMessage = ref('正在准备游戏环境，请稍候...');
+    
+    return { route, router, userStore, websocketStore, chatStore, roomStore, showGameLoading, gameLoadingTitle, gameLoadingMessage }; // --- 返回 roomStore ---
   },
   data() {
     return {
@@ -368,6 +382,10 @@ export default {
     // 添加事件监听
     document.addEventListener('god-words-selection', this.handleGodWordSelectionEvent);
     document.addEventListener('god-words-selected', this.handleGodWordsSelectedEvent);
+    
+    // 确保已添加上帝角色询问状态监听器（如果在created中没有注册）
+    document.removeEventListener('god-role-inquiry-status', this.handleGodRoleInquiryStatusEvent); // 先移除以防重复
+    document.addEventListener('god-role-inquiry-status', this.handleGodRoleInquiryStatusEvent);
   },
   watch: {
     // Watch the roomInfo computed property
@@ -756,7 +774,13 @@ export default {
       };
       
       this.ws.onmessage = (event) => {
-        // ... existing code ...
+        try {
+          const data = JSON.parse(event.data);
+          // 确保WebSocket消息直接调用handleReceivedMessage方法处理
+          this.handleReceivedMessage(data);
+        } catch (error) {
+          console.error('[RoomView] 处理WebSocket消息出错:', error);
+        }
       }
     },
     handleCancelReady() {
@@ -834,8 +858,13 @@ export default {
             if (data.current_user === this.currentUser?.id) {
               // 是当前用户，弹窗已经显示
               console.log('[RoomView] 当前正在询问我是否愿意担任上帝');
+            } else {
+              // 为其他用户显示询问状态弹窗 - 修复其他用户弹窗不显示的问题
+              this.showGodRoleInquiryStatus = true;
+              this.godRoleInquiryStatusMessage = data.message || '正在询问玩家是否愿意担任上帝...';
+              this.godRoleInquiryStatusTimeout = data.timeout || 7;
+              this.godRoleInquiryStatusUsername = data.username || '';
             }
-            // 其他用户的状态更新由事件处理系统处理
             break;
             
           // 处理上帝角色分配结果
@@ -883,7 +912,18 @@ export default {
           case 'god_words_selected':
             this.showGodWordSelection = false;
             this.showGodWordSelectionStatus = false;
-            this.showNotification('success', '词语选择完成，游戏开始！');
+            
+            // 显示游戏加载动画
+            this.showGameLoading = true;
+            this.gameLoadingTitle = '游戏初始化中';
+            this.gameLoadingMessage = '正在分配角色，请稍候...';
+            break;
+          
+          // 处理游戏初始化完成
+          case 'game_initialized':
+            // 关闭游戏加载动画
+            this.showGameLoading = false;
+            this.showNotification('success', '游戏初始化完成，游戏开始！');
             break;
           
           // 处理更多消息类型...
@@ -972,8 +1012,16 @@ export default {
       this.showGodWordSelection = false;
       this.showGodWordSelectionStatus = false;
       
-      // 显示成功提示
-      this.showNotification('success', '词语选择完成，游戏开始！');
+      // 显示游戏加载动画 - 与WebSocket消息处理保持一致
+      this.showGameLoading = true;
+      this.gameLoadingTitle = '游戏初始化中';
+      this.gameLoadingMessage = '正在分配角色，请稍候...';
+      
+      // 记录调试日志
+      console.log('[RoomView] 选词完成处理完毕，状态: ' +
+        `选词弹窗=${this.showGodWordSelection}, ` +
+        `状态弹窗=${this.showGodWordSelectionStatus}, ` + 
+        `加载动画=${this.showGameLoading}`);
     },
     
     // 添加通知显示方法
@@ -1015,27 +1063,27 @@ export default {
     // 处理上帝选词确认
     handleGodWordSelectionConfirm(wordsData) {
       console.log('[RoomView] 用户确认选词:', wordsData);
-      // TODO: 后续实现上帝选词传给后端的逻辑
-      // this.websocketStore.sendMessage({
-      //   type: 'god_words_selected',
-      //   team_one_words: wordsData.teamOne,
-      //   team_two_words: wordsData.teamTwo
-      // });
+      // 发送上帝选词消息给后端
+      this.websocketStore.sendMessage({
+        type: 'god_words_selected',
+        civilian_word: wordsData.civilian_word,
+        spy_word: wordsData.spy_word
+      });
       
-      // 关闭选词弹窗
+      // 关闭选词弹窗并显示加载动画
       this.showGodWordSelection = false;
-      
-      // 显示成功提示
-      this.showNotification('success', '词语选择完成！等待游戏开始...');
+      this.showGameLoading = true;
+      this.gameLoadingTitle = '游戏初始化中';
+      this.gameLoadingMessage = '正在等待服务器初始化游戏...';
     },
     
     // 处理上帝选词超时
     handleGodWordSelectionTimeout() {
       console.log('[RoomView] 选词超时');
-      // TODO: 后续实现选词超时通知后端的逻辑
-      // this.websocketStore.sendMessage({
-      //   type: 'god_words_selection_timeout'
-      // });
+      // 实现选词超时通知后端的逻辑
+      this.websocketStore.sendMessage({
+        type: 'god_words_selection_timeout'
+      });
       
       // 关闭选词弹窗
       this.showGodWordSelection = false;
