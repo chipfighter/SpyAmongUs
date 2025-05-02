@@ -1769,6 +1769,12 @@ class GameService:
                 "timestamp": int(time.time() * 1000)
             }
             
+            # 获取当前所有投票计数
+            vote_counts = await self.redis_client.hgetall(vote_count_key)
+            
+            # 将投票计数添加到消息中
+            vote_message["vote_count"] = vote_counts
+            
             await self.websocket_manager.broadcast_message(
                 invite_code=room_id,
                 message=vote_message,

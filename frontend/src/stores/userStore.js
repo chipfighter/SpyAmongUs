@@ -294,6 +294,72 @@ export const useUserStore = defineStore('user', {
       }
     },
     
+    async updateAvatar(userId, avatarUrl) {
+      this.loading = true
+      this.error = null
+      
+      try {
+        const response = await axios({
+          method: 'post',
+          url: `${API_URL}/api/user/${userId}/update_avatar`,
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          data: { avatar_url: avatarUrl }
+        })
+        
+        if (response.data.success) {
+          // 更新本地用户数据
+          if (this.user) {
+            this.user.avatar_url = avatarUrl
+            this.saveUserData()
+          }
+          return true
+        } else {
+          this.error = response.data.message
+          return false
+        }
+      } catch (error) {
+        this.error = error.response?.data?.message || '更新头像失败，请稍后再试'
+        return false
+      } finally {
+        this.loading = false
+      }
+    },
+    
+    async updatePassword(userId, oldPassword, newPassword) {
+      this.loading = true
+      this.error = null
+      
+      try {
+        const response = await axios({
+          method: 'post',
+          url: `${API_URL}/api/user/${userId}/update_password`,
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          data: { 
+            old_password: oldPassword,
+            new_password: newPassword
+          }
+        })
+        
+        if (response.data.success) {
+          return true
+        } else {
+          this.error = response.data.message
+          return false
+        }
+      } catch (error) {
+        this.error = error.response?.data?.message || '更新密码失败，请稍后再试'
+        return false
+      } finally {
+        this.loading = false
+      }
+    },
+    
     async refreshAccessToken() {
       if (!this.refreshToken) {
         console.error('刷新token失败: 没有可用的刷新令牌')

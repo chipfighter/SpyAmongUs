@@ -25,10 +25,6 @@
         <!-- 游戏统计数据 -->
         <div class="game-stats">
           <div class="stat-item">
-            <span class="stat-label">游戏时长：</span>
-            <span class="stat-value">{{ formatTime(gameStats.duration) }}</span>
-          </div>
-          <div class="stat-item">
             <span class="stat-label">总回合数：</span>
             <span class="stat-value">{{ gameStats.rounds }}</span>
           </div>
@@ -50,7 +46,7 @@
               }"
             >
               <div class="player-avatar">
-                <img :src="player.avatar || '/default_avatar.jpg'" alt="玩家头像" @error="onAvatarError">
+                <img :src="getPlayerAvatar(player)" alt="玩家头像">
               </div>
               <div class="player-info">
                 <div class="player-name">{{ player.name }}</div>
@@ -63,8 +59,7 @@
       
       <!-- 按钮区域 -->
       <div class="game-result-actions">
-        <button class="result-action-btn" @click="handleClose">返回聊天室</button>
-        <button class="result-action-btn" @click="$emit('prepare-next-game')">准备下一局</button>
+        <button class="result-action-btn" @click="handleClose">确认</button>
       </div>
     </div>
   </div>
@@ -94,7 +89,6 @@ const props = defineProps({
   gameStats: {
     type: Object,
     default: () => ({
-      duration: 0, // 游戏持续时间（秒）
       rounds: 0,    // 游戏回合数
       players: []   // 玩家列表，每个玩家包含 id, name, role, avatar
     })
@@ -139,13 +133,6 @@ const resultMessage = computed(() => {
   }
 });
 
-// 时间格式化函数
-const formatTime = (seconds) => {
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return `${minutes}分${remainingSeconds}秒`;
-};
-
 // 角色显示文本
 const getRoleDisplay = (role) => {
   switch (role) {
@@ -160,9 +147,13 @@ const getRoleDisplay = (role) => {
   }
 };
 
-// 处理头像加载错误
-const onAvatarError = (event) => {
-  event.target.src = '/default_avatar.jpg';
+// 获取玩家头像
+const getPlayerAvatar = (player) => {
+  if (player.id.startsWith('llm_player_')) {
+    return '/default_room_robot_avatar.jpg'; // 默认AI头像
+  } else {
+    return player.avatar || '/default_avatar.jpg';
+  }
 };
 </script>
 
@@ -304,7 +295,7 @@ const onAvatarError = (event) => {
   padding: 15px;
   margin-bottom: 20px;
   display: flex;
-  justify-content: space-around;
+  justify-content: center;
 }
 
 .stat-item {
@@ -351,24 +342,25 @@ const onAvatarError = (event) => {
 
 .players-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 15px;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
 }
 
 .player-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 15px;
+  padding: 8px;
   background-color: rgba(255, 255, 255, 0.7);
   border-radius: 8px;
   transition: transform 0.2s;
   border: 1px solid #eaeaea;
+  min-width: 0;
 }
 
 .player-card:hover {
-  transform: translateY(-5px);
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+  transform: translateY(-3px);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.1);
 }
 
 .player-card.current-player {
@@ -377,23 +369,23 @@ const onAvatarError = (event) => {
 }
 
 .player-card.civilian {
-  border-left: 4px solid #52c41a;
+  border-left: 3px solid #52c41a;
 }
 
 .player-card.spy {
-  border-left: 4px solid #ff4d4f;
+  border-left: 3px solid #ff4d4f;
 }
 
 .player-card.god {
-  border-left: 4px solid #722ed1;
+  border-left: 3px solid #722ed1;
 }
 
 .player-avatar {
-  width: 50px;
-  height: 50px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   overflow: hidden;
-  margin-bottom: 10px;
+  margin-bottom: 5px;
 }
 
 .player-avatar img {
@@ -409,8 +401,8 @@ const onAvatarError = (event) => {
 
 .player-name {
   font-weight: bold;
-  margin-bottom: 5px;
-  font-size: 14px;
+  margin-bottom: 2px;
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -418,10 +410,10 @@ const onAvatarError = (event) => {
 }
 
 .player-role {
-  font-size: 12px;
+  font-size: 10px;
   color: #666;
-  padding: 2px 8px;
-  border-radius: 10px;
+  padding: 1px 4px;
+  border-radius: 8px;
   background-color: #f5f5f5;
 }
 
@@ -443,32 +435,34 @@ const onAvatarError = (event) => {
 .game-result-actions {
   display: flex;
   justify-content: center;
-  gap: 20px;
-  padding: 20px;
+  padding: 15px;
   border-top: 1px solid #eaeaea;
 }
 
 .result-action-btn {
-  padding: 10px 20px;
+  padding: 8px 30px;
   font-size: 16px;
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.3s;
-  background-color: #f5f5f5;
-  border: 1px solid #d9d9d9;
-  color: #333;
+  background-color: #1890ff;
+  border: none;
+  color: white;
 }
 
 .result-action-btn:hover {
-  background-color: #e6f7ff;
-  border-color: #1890ff;
-  color: #1890ff;
+  background-color: #40a9ff;
+  box-shadow: 0 2px 8px rgba(24, 144, 255, 0.5);
+}
+
+.win .result-action-btn {
+  background-color: #ffbb00;
+  color: #fff;
 }
 
 .win .result-action-btn:hover {
-  background-color: #fff7e6;
-  border-color: #ffbb00;
-  color: #d18700;
+  background-color: #ffcc33;
+  box-shadow: 0 2px 8px rgba(255, 187, 0, 0.5);
 }
 
 /* 动画效果 */
@@ -496,12 +490,18 @@ const onAvatarError = (event) => {
   }
   
   .players-grid {
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    grid-template-columns: repeat(3, 1fr);
   }
   
   .game-stats {
     flex-direction: column;
     gap: 10px;
+  }
+}
+
+@media (max-width: 480px) {
+  .players-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 </style> 

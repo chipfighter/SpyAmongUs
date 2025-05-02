@@ -1341,25 +1341,10 @@ export default {
         }
       }
       
-      // 通知用户轮到谁发言
-      let speakerName = data.speaker_name || "未知玩家";
+      // 通知用户轮到谁发言 - 不显示调试信息
       if (isCurrentUserTurn) {
-        speakerName = "您";
-      } else if (!data.speaker_name) {
-        // 如果后端没有提供speaker_name，尝试从房间用户列表中获取用户名
-        const speaker = this.roomUsers.find(user => user.id === this.currentSpeakerId);
-        if (speaker) {
-          speakerName = speaker.username || "未知玩家";
-          // 如果是AI玩家，显示AI玩家_X
-          if (this.currentSpeakerId.startsWith('llm_player_')) {
-            const playerNumber = this.currentSpeakerId.replace('llm_player_', '');
-            speakerName = `AI玩家_${playerNumber}`;
-          }
-        }
+        this.showNotification('info', `轮到您发言${this.speakTimeoutSeconds > 0 ? `，时间：${this.speakTimeoutSeconds}秒` : ''}`);
       }
-      
-      // 显示通知
-      this.showNotification('info', `当前由${speakerName}发言${this.speakTimeoutSeconds > 0 ? `，时间：${this.speakTimeoutSeconds}秒` : ''}`);
     },
     // 处理玩家投票
     handleVote(targetId) {
@@ -1644,10 +1629,6 @@ export default {
     showGameResultModal(gameEndData) {
       console.log('[RoomView] 显示游戏结算弹窗，数据:', gameEndData);
       
-      // 计算游戏时长
-      const gameEndTime = Date.now();
-      const gameDuration = Math.floor((gameEndTime - this.gameStartTimestamp) / 1000);
-      
       // 获取当前用户角色
       const currentUserRole = this.roomStore.currentRole;
       
@@ -1699,7 +1680,6 @@ export default {
       this.isGameResultWin = isUserWin;
       this.gameResultWinningRole = winningRole;
       this.gameResultStats = {
-        duration: gameDuration,
         rounds: this.roomStore.currentRound || gameEndData.rounds || 1,
         players: playersData
       };

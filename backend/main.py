@@ -108,6 +108,7 @@ game_service.set_llm_pipeline(llm_pipeline)
 @app.middleware("http")
 async def verify_token_middleware(request: Request, call_next):
     """验证token中间件，排除公开路径，验证其他所有请求的token"""
+
     # 不需要验证的路径
     public_paths = ["/api/register", "/api/login", "/api/refresh-token", "/api/token/refresh", "/"]
     current_path = request.url.path
@@ -1101,6 +1102,59 @@ async def submit_vote(invite_code: str, vote_data: Dict[str, Any], request: Requ
             status_code=500,
             content={"status": "error", "message": f"服务器错误: {str(e)}"}
         )
+
+# 用户信息修改相关API
+@app.post("/api/user/{user_id}/update_password")
+async def update_password(user_id: str, password_data: Dict[str, str], request: Request):
+    """更新用户密码API"""
+    try:
+        # 验证权限
+        if not hasattr(request.state, 'user_id'):
+            raise HTTPException(status_code=401, detail="未授权，请重新登录")
+            
+        if request.state.user_id != user_id:
+            raise HTTPException(status_code=403, detail="无权修改此用户密码")
+        
+        # 更新密码
+        result = await user_service.update_password(
+            user_id, 
+            password_data["old_password"], 
+            password_data["new_password"]
+        )
+        
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+            
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新用户密码发生错误: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/user/{user_id}/update_avatar")
+async def update_avatar(user_id: str, avatar_data: Dict[str, str], request: Request):
+    """更新用户头像API"""
+    try:
+        # 验证权限
+        if not hasattr(request.state, 'user_id'):
+            raise HTTPException(status_code=401, detail="未授权，请重新登录")
+            
+        if request.state.user_id != user_id:
+            raise HTTPException(status_code=403, detail="无权修改此用户头像")
+        
+        # 更新头像
+        result = await user_service.update_avatar(user_id, avatar_data["avatar_url"])
+        
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+            
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新用户头像发生错误: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, reload=DEBUG)

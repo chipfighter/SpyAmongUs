@@ -22,14 +22,35 @@
       
       <div class="user-info">
         <span class="username">{{ userStore.user?.username || '未登录' }}</span>
+        <!-- 头像和下拉菜单 -->
         <div class="avatar-container">
-          <img :src="userStore.userAvatar" alt="用户头像" class="avatar" />
+          <img 
+            :src="userStore.userAvatar" 
+            alt="用户头像" 
+            class="avatar" 
+            @click.stop="toggleUserMenu"
+          >
         </div>
         <button @click="handleLogout" class="logout-btn" title="登出">
           退出
         </button>
       </div>
     </header>
+
+    <!-- 全局下拉菜单，与其他布局元素完全分离 -->
+    <div 
+      v-if="showUserMenu" 
+      class="floating-menu"
+      :style="{ top: menuPosition.top + 'px', left: menuPosition.left + 'px' }"
+      @click.stop
+    >
+      <div class="menu-item" @click="goToProfile">
+        <span class="menu-icon">👤</span> 个人信息
+      </div>
+      <div class="menu-item disabled">
+        <span class="menu-icon">⚙️</span> 设置
+      </div>
+    </div>
     
     <!-- 大厅内容区 -->
     <main class="lobby-content">
@@ -311,6 +332,36 @@ if (typeof window._refreshStates === 'undefined') {
   }
 }
 
+// 用户菜单相关
+const showUserMenu = ref(false)
+const menuPosition = ref({ top: 0, left: 0 })
+
+const toggleUserMenu = (event) => {
+  event.stopPropagation() // 阻止事件冒泡
+  
+  if (!showUserMenu.value) {
+    // 计算下拉菜单位置，基于头像位置
+    const avatar = event.target
+    const rect = avatar.getBoundingClientRect()
+    menuPosition.value = {
+      top: rect.bottom + window.scrollY + 5, // 头像底部下方5px
+      left: rect.left + window.scrollX - 30  // 与头像左侧对齐，稍微调整
+    }
+  }
+  
+  showUserMenu.value = !showUserMenu.value
+}
+
+const goToProfile = () => {
+  router.push('/profile')
+  showUserMenu.value = false
+}
+
+// 点击任何地方关闭菜单
+const closeMenu = (event) => {
+  showUserMenu.value = false
+}
+
 onMounted(async () => {
   // 初始用户数据
   userStore.initStore()
@@ -369,6 +420,9 @@ onMounted(async () => {
   
   // 只挂载一次路由守卫 (防止重复挂载)
   setupRouteGuard();
+  
+  // 添加全局点击监听器，关闭用户菜单
+  document.addEventListener('click', closeMenu)
 })
 
 onBeforeUnmount(() => {
@@ -381,6 +435,9 @@ onBeforeUnmount(() => {
   // 停止自动刷新并移除页面可见性监听
   stopAutoRefresh()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
+  
+  // 移除全局点击监听器
+  document.removeEventListener('click', closeMenu)
 })
 
 // 修改refreshRooms函数，保证所有场景下刷新动画一致
@@ -846,6 +903,7 @@ function closeContextMenuAndDialogs() {
   // 如果有其他弹窗，也在这里关闭
   // showCreateRoomDialog.value = false;
   // showJoinRoomDialog.value = false;
+  showUserMenu.value = false
 }
 
 // --- 结束：上下文菜单逻辑 ---
@@ -1199,6 +1257,8 @@ function handleVisibilityChange() {
   border-radius: 50%;
   object-fit: cover;
   border: 2px solid #e9ecef;
+  transition: border-color 0.2s;
+  cursor: pointer; /* 添加手型指针 */
 }
 
 .logout-btn {
@@ -1856,5 +1916,44 @@ input:checked + .slider:before {
   font-style: normal;
   font-weight: bold;
   margin-right: 0.3rem; /* 图标和文字间距 */
+}
+
+/* 独立下拉菜单样式 */
+.floating-menu {
+  position: fixed; /* 使用fixed而不是absolute */
+  background: white;
+  border-radius: 4px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+  z-index: 2000; /* 确保高于其他元素 */
+  overflow: hidden;
+  width: 120px;
+}
+
+.floating-menu .menu-item {
+  padding: 10px 15px;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.2s;
+  display: flex;
+  align-items: center;
+}
+
+.menu-icon {
+  margin-right: 8px;
+  font-size: 16px;
+}
+
+.floating-menu .menu-item:hover {
+  background: #f5f5f5;
+}
+
+.floating-menu .menu-item.disabled {
+  color: #999;
+  cursor: not-allowed;
+}
+
+.floating-menu .menu-item.disabled:hover {
+  background: transparent;
 }
 </style>

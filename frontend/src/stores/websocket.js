@@ -526,6 +526,22 @@ export const useWebsocketStore = defineStore('websocket', {
             
             // 系统消息已由后端通过另一条消息发送，不需要在这里添加
             break;
+        case 'vote_cast':
+            // 处理投票事件消息
+            console.log('[WS] 收到投票事件消息:', data);
+            
+            // 记录谁投票给谁
+            if (data.voter_id && data.target_id) {
+              roomStore.recordVote(data.voter_id, data.target_id);
+              
+              // 添加系统消息通知
+              chatStore.addMessage({
+                is_system: true,
+                content: `${data.voter_name || '玩家'} 投票给了 ${data.target_name || '目标玩家'}`,
+                timestamp: data.timestamp || Date.now()
+              });
+            }
+            break;
         case 'vote_phase_start':
             // 处理投票阶段开始消息
             console.log('[WS] 投票阶段开始:', data);

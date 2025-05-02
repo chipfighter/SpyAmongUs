@@ -52,9 +52,19 @@ class LLM_Pipeline:
         history = ""
         for msg in recent_messages:
             # 判断是否为系统消息
-            prefix = "[系统] " if msg.is_system else ""
+            is_system = False
+            if isinstance(msg, dict):
+                is_system = msg.get("type") == "system"
+            else:
+                is_system = getattr(msg, "is_system", False)
+            
+            prefix = "[系统] " if is_system else ""
             # 添加时间戳和用户名
-            history += f"{prefix}[{msg.timestamp}] {msg.username}: {msg.content}\n"
+            username = msg.get("username", "") if isinstance(msg, dict) else getattr(msg, "username", "")
+            content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+            timestamp = msg.get("timestamp", 0) if isinstance(msg, dict) else getattr(msg, "timestamp", 0)
+            
+            history += f"{prefix}[{timestamp}] {username}: {content}\n"
             
         return history
 
