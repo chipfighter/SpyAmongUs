@@ -48,11 +48,15 @@ const startCountdown = (duration = 5) => {
 
 // 取消倒计时
 const cancelCountdown = () => {
+  console.log('CountdownOverlay: 取消倒计时动画');
   if (countdownTimer) {
     clearInterval(countdownTimer);
     countdownTimer = null;
   }
+  // 立即隐藏倒计时组件
   isVisible.value = false;
+  // 重置计数器
+  currentCount.value = 3;
 };
 
 // 组件卸载时清理

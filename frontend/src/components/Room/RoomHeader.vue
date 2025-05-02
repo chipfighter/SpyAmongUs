@@ -7,6 +7,32 @@
         <button class="copy-button" @click="$emit('copy-invite-code')" title="复制邀请码">📋</button>
       </div>
     </div>
+    <!-- 游戏回合显示（居中） -->
+    <div v-if="gameStarted" class="game-round-container">
+      <div class="game-round">回合 {{ currentRound }}</div>
+    </div>
+    
+    <!-- 词语显示（右侧） -->
+    <div v-if="gameStarted && roomStore.currentRole" class="word-display-container">
+      <!-- 上帝视角：显示两个词语 -->
+      <template v-if="roomStore.currentRole === 'god'">
+        <div class="god-words">
+          <div class="word-item">卧底词语：{{ roomStore.spyWord }}</div>
+          <div class="word-item">平民词语：{{ roomStore.civilianWord }}</div>
+        </div>
+      </template>
+      
+      <!-- 平民视角：只显示平民词语 -->
+      <div v-else-if="roomStore.currentRole === 'civilian'" class="word-item">
+        平民词语：{{ roomStore.civilianWord }}
+      </div>
+      
+      <!-- 卧底视角：只显示卧底词语 -->
+      <div v-else-if="roomStore.currentRole === 'spy'" class="word-item">
+        卧底词语：{{ roomStore.spyWord }}
+      </div>
+    </div>
+    
     <div class="connection-status" :class="connectionStatus">
       <span v-if="connectionStatus === 'connected'" title="连接正常">🟢</span>
       <span v-else-if="connectionStatus === 'connecting'" title="正在连接">🟡</span>
@@ -47,17 +73,20 @@
         </button>
       </template>
     </div>
-    <!-- 游戏状态指示器 -->
-    <div v-else class="game-status-indicator">
-      {{ isGodPolling ? '选择上帝中...' : '游戏进行中' }}
+    <!-- 游戏状态指示器（右上角） -->
+    <div v-else class="game-status-indicator" :class="isGodPolling ? 'god-polling' : gamePhaseClass">
+      {{ isGodPolling ? '选择上帝中...' : gamePhaseText }}
     </div>
   </div>
 </template>
 
 <script setup>
-import { defineProps, defineEmits } from 'vue';
+import { defineProps, defineEmits, computed } from 'vue';
+import { useRoomStore } from '../../stores/room';
 
-defineProps({
+const roomStore = useRoomStore();
+
+const props = defineProps({
   roomInfo: {
     type: Object,
     required: true,
@@ -82,6 +111,16 @@ defineProps({
   isGodPolling: {
     type: Boolean,
     default: false
+  },
+  // 添加游戏阶段属性
+  gamePhase: {
+    type: String,
+    default: 'speaking'
+  },
+  // 添加当前回合属性
+  currentRound: {
+    type: Number,
+    default: 1
   }
 });
 
@@ -91,6 +130,38 @@ defineEmits([
   'leave-room', 
   'disband-room'
 ]);
+
+// 根据游戏阶段返回对应的文本
+const gamePhaseText = computed(() => {
+  switch(props.gamePhase) {
+    case 'speaking':
+      return '发言中...';
+    case 'voting':
+      return '投票中';
+    case 'secret_chat':
+      return '秘密聊天室';
+    case 'last_words':
+      return '遗言时间';
+    default:
+      return '游戏中';
+  }
+});
+
+// 根据游戏阶段返回对应的CSS类名
+const gamePhaseClass = computed(() => {
+  switch(props.gamePhase) {
+    case 'speaking':
+      return 'phase-speaking';
+    case 'voting':
+      return 'phase-voting';
+    case 'secret_chat':
+      return 'phase-secret-chat';
+    case 'last_words':
+      return 'phase-last-words';
+    default:
+      return '';
+  }
+});
 
 </script>
 
@@ -110,12 +181,16 @@ defineEmits([
 .room-title {
   display: flex;
   align-items: baseline;
+  max-width: 40%;
 }
 
 .room-title h1 {
   margin: 0;
   font-size: 1.5rem;
   color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .room-code {
@@ -241,13 +316,91 @@ defineEmits([
   background-color: #E57373;
 }
 
+/* 游戏回合显示样式 */
+.game-round-container {
+  position: absolute;
+  top: 5px; /* 向上移动，与顶部边框保持5px的距离 */
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 1001;
+}
+
+.game-round {
+  font-weight: bold;
+  font-size: 1.8rem;
+  color: #333;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+  background-color: rgba(255,255,255,0.7);
+  padding: 2px 15px;
+  border-radius: 15px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+  transition: all 0.3s ease;
+}
+
+/* 词语显示样式 - 移至右侧 */
+.word-display-container {
+  position: absolute;
+  top: 50%;
+  right: 180px; /* 与右侧保持一定距离 */
+  transform: translateY(-50%); /* 垂直居中 */
+  background-color: rgba(255,255,255,0.85);
+  padding: 5px 12px;
+  border-radius: 10px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  font-weight: 500;
+  max-width: 450px;
+  max-height: 45px; /* 确保不超过顶栏高度 */
+  overflow: hidden;
+  z-index: 1002;
+}
+
+.word-item {
+  margin: 2px 0;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+}
+
+.god-words {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 20px; /* 两个词之间的间距 */
+}
+
 /* 游戏状态指示器样式 */
 .game-status-indicator {
   padding: 8px 16px;
-  background-color: #1890ff;
   border-radius: 4px;
   color: white;
   font-weight: bold;
   text-align: center;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* 上帝轮询状态 */
+.game-status-indicator.god-polling {
+  background-color: #1890ff;
+}
+
+/* 不同阶段的样式 - 游戏状态指示器 */
+.game-status-indicator.phase-speaking {
+  background-color: #64B5F6; /* 浅蓝色 */
+}
+
+.game-status-indicator.phase-voting {
+  background-color: #81C784; /* 浅绿色 */
+}
+
+.game-status-indicator.phase-secret-chat {
+  background-color: #9575CD; /* 浅紫色 */
+}
+
+.game-status-indicator.phase-last-words {
+  background-color: #9E9E9E; /* 灰色 */
 }
 </style> 

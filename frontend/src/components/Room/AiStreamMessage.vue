@@ -3,10 +3,10 @@
   <div class="ai-stream-message">
     <!-- AI头像和名称 -->
     <div class="avatar">
-      <img src="/default_room_robot_avatar.jpg" alt="AI助理">
+      <img src="/default_room_robot_avatar.jpg" :alt="username">
     </div>
     <div class="message-content">
-      <div class="username">AI助理</div>
+      <div class="username">{{ username }}</div>
       <div class="text">
         <!-- 当内容为空且正在streaming时显示加载动画 -->
         <div v-if="isStreaming && !processedContent" class="loading-dots">
@@ -16,8 +16,8 @@
         </div>
         <!-- 否则显示内容 -->
         <span v-else v-html="formattedContent"></span>
-        <!-- 只在流式输出且有内容时显示打字光标 -->
-        <span v-if="isStreaming && processedContent" class="cursor"></span>
+        <!-- 只在流式输出进行中显示打字光标，消息结束后不显示 -->
+        <span v-if="isStreaming && processedContent.length > 0" class="cursor"></span>
       </div>
       <div class="message-time">{{ formatTime }}</div>
     </div>
@@ -39,6 +39,10 @@ export default {
     timestamp: {
       type: Number,
       default: () => Date.now()
+    },
+    username: {
+      type: String,
+      default: 'AI助理'
     }
   },
   data() {
@@ -110,6 +114,14 @@ export default {
         
         // 更新缓冲区
         this.lastEndChars = this.processedContent.slice(-3);
+      }
+    },
+    // 添加对isStreaming的监听，确保状态变化时正确更新UI
+    isStreaming(newValue) {
+      if (!newValue) {
+        console.log('AI流式消息结束，隐藏光标');
+        // 强制组件重新渲染确保光标消失
+        this.$forceUpdate();
       }
     }
   }

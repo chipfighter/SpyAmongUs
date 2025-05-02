@@ -56,10 +56,11 @@ USER_STATUS_PLAYING = "playing"
 GAME_STATUS_WAITING = "waiting"
 GAME_STATUS_PLAYING = "playing"
 
+# 游戏阶段
 GAME_PHASE_SPEAKING = "speaking"
 GAME_PHASE_VOTING = "voting"
-GAME_PHASE_SECRET_CHAT = "secret_chat"
 GAME_PHASE_LAST_WORDS = "last_words"
+GAME_PHASE_SECRET_CHAT = "secret_chat"
 
 ROLE_CIVILIAN = "civilian"
 ROLE_SPY = "spy"
@@ -79,3 +80,10 @@ LLM_CONTEXT_NORMAL_CHAT = "normal_chat"         # 未开始游戏时的普通聊
 LLM_CONTEXT_GAME_PLAYING = "game_playing"       # 游戏中轮到AI玩家发言
 LLM_CONTEXT_SECRET_VOTE = "secret_vote"         # 游戏中秘密聊天室投票
 LLM_CONTEXT_SECRET_CHAT = "secret_chat"         # 游戏中秘密聊天室聊天
+LLM_CONTEXT_VOTING = "voting"                   # 游戏中普通投票场景
+LLM_CONTEXT_LAST_WORDS = "last_words"           # 游戏中玩家被淘汰后的遗言
+LLM_CONTEXT_GOD_WORDS = "god_words"             # 上帝分发词语
+
+# 投票相关
+VOTE_TIMEOUT = 10  # 投票超时时间（秒）
+VOTE_SERVER_TIMEOUT = 11.5  # 服务器投票超时时间（秒）

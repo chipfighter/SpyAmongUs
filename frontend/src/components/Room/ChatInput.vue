@@ -6,12 +6,17 @@
         @input="handleInput"
         @keydown.enter="handleEnterKey"
         @keydown="handleMentionNavigation"
-        placeholder="输入消息..." 
-        :disabled="!isConnected"
+        :placeholder="getPlaceholderText" 
+        :disabled="!isConnected || (gameStarted && !canSpeak)"
         ref="messageInputRef"
         class="message-textarea"
         rows="1"
       ></textarea>
+      
+      <!-- 字符计数显示 -->
+      <div class="char-counter" :class="{ 'warning': isNearLimit, 'error': isOverLimit }">
+        {{ modelValue.length }}/70
+      </div>
       
       <!-- @用户列表弹出框 -->
       <div v-if="showMentionPopup" class="mention-popup">
@@ -44,7 +49,10 @@
         </div>
       </div>
     </div>
-    <button @click="emitSendMessage" :disabled="!isConnected || !modelValue.trim()">
+    <button 
+      @click="emitSendMessage" 
+      :disabled="!isConnected || !modelValue.trim() || (gameStarted && !canSpeak)"
+    >
       发送
     </button>
   </div>
@@ -73,7 +81,41 @@ const props = defineProps({
     type: String,
     required: true,
     default: ''
+  },
+  // 新增游戏相关属性
+  gameStarted: {
+    type: Boolean,
+    default: false
+  },
+  canSpeak: {
+    type: Boolean,
+    default: false
+  },
+  currentSpeakerId: {
+    type: String,
+    default: ''
   }
+});
+
+// 添加获取占位符文本的计算属性
+const getPlaceholderText = computed(() => {
+  if (!props.isConnected) {
+    return "连接已断开...";
+  }
+  
+  if (props.gameStarted) {
+    if (!props.canSpeak) {
+      if (props.currentSpeakerId) {
+        // 查找当前发言人的用户名
+        const speaker = props.users.find(user => user.id === props.currentSpeakerId);
+        return `等待${speaker?.username || '其他玩家'}发言...`;
+      }
+      return "等待轮到你发言...";
+    }
+    return "轮到你发言了！";
+  }
+  
+  return "输入消息...";
 });
 
 const emit = defineEmits([
@@ -82,6 +124,15 @@ const emit = defineEmits([
 ]);
 
 const messageInputRef = ref(null);
+
+// 添加字符限制相关的计算属性
+const isNearLimit = computed(() => {
+  return props.modelValue.length > 50 && props.modelValue.length <= 70;
+});
+
+const isOverLimit = computed(() => {
+  return props.modelValue.length > 70;
+});
 
 // --- @ Mention Logic --- 
 const showMentionPopup = ref(false);
@@ -93,7 +144,14 @@ const showAiAssistant = ref(true); // 控制AI助手是否显示
 
 const handleInput = (event) => {
   const text = event.target.value;
-  emit('update:modelValue', text); // Update v-model in parent
+  
+  // 限制输入字符不超过70
+  if (text.length > 70) {
+    // 截断文本到70个字符
+    emit('update:modelValue', text.substring(0, 70));
+  } else {
+    emit('update:modelValue', text); // Update v-model in parent
+  }
   
   const lastAtSignIndex = text.lastIndexOf('@');
   
@@ -193,8 +251,27 @@ const handleEnterKey = (event) => {
 };
 
 const emitSendMessage = () => {
-  if (props.modelValue.trim() && props.isConnected) {
-      emit('send-message'); // Emit event, parent handles actual sending
+  if (props.modelValue.trim() && props.isConnected && props.modelValue.length <= 70) {
+    if (props.gameStarted && props.canSpeak) {
+      // 游戏中发言后立即禁言，不等待服务器响应
+      console.log('[ChatInput] 游戏中发言，立即禁言');
+      
+      // 发送消息事件
+      emit('send-message'); 
+      
+      // 通知父组件立即禁言，创建一个新的自定义事件
+      nextTick(() => {
+        if (typeof window !== 'undefined') {
+          // 触发一个立即禁言的事件
+          window.dispatchEvent(new CustomEvent('immediate-disable-speaking', {
+            detail: { userId: props.currentUserId }
+          }));
+        }
+      });
+    } else {
+      // 游戏未开始时正常发送
+      emit('send-message');
+    }
   }
 };
 
@@ -331,5 +408,31 @@ const onAvatarError = (event) => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.message-textarea:disabled {
+  background-color: #f0f0f0;
+  color: #999;
+  cursor: not-allowed;
+}
+
+/* 添加字符计数器样式 */
+.char-counter {
+  position: absolute;
+  bottom: 8px;
+  right: 14px;
+  font-size: 12px;
+  color: #999;
+  background: rgba(255, 255, 255, 0.8);
+  padding: 2px 5px;
+  border-radius: 10px;
+}
+
+.char-counter.warning {
+  color: #faad14;
+}
+
+.char-counter.error {
+  color: #ff4d4f;
 }
 </style> 

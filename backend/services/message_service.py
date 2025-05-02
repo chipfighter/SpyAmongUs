@@ -87,15 +87,7 @@ class MessageService:
                 "valid": False,
                 "message": "消息类型无效"
             }
-            
-        # 秘密消息特殊处理
-        if msg_type == "secret" and "target_users" not in message_data:
-            logger.error("秘密消息缺少target_users字段")
-            return {
-                "valid": False,
-                "message": "秘密消息必须包含target_users字段"
-            }
-            
+
         logger.info("消息格式验证通过")
         return {
             "valid": True,
@@ -148,7 +140,12 @@ class MessageService:
             return {"success": False, "message": f"Failed to process message: {str(e)}"}
 
     async def _process_message(self, room_id: str, message_data: dict) -> None:
-        """处理来自Redis队列的消息"""
+        """
+        处理来自Redis消息队列的消息
+
+        Notes:
+            内置消息预处理函数，重点处理AI相关的聊天消息+游戏不同阶段的分别调用
+        """
         try:
             logger.info(f"处理来自Redis队列的消息: {message_data}")
 
@@ -156,6 +153,34 @@ class MessageService:
             if not user_id:
                 logger.error(f"消息缺少user_id字段: {message_data}")
                 return
+
+            # 获取当前游戏状态
+            room_data = await self.redis_client.get_room_basic_data(room_id)
+            game_started = room_data.get("status") == "playing"
+            current_phase = room_data.get("current_phase", "")
+            
+            # 根据游戏阶段分发处理
+            if game_started:
+                if current_phase == "speaking":
+                    # 发言阶段消息处理
+                    await self._handle_speaking_phase_message(room_id, message_data, user_id)
+                    return  # 如果已处理完毕，直接返回
+                elif current_phase == "voting":
+                    # 投票阶段消息处理
+                    await self._handle_voting_phase_message(room_id, message_data, user_id)
+                    return
+                elif current_phase == "last_words":
+                    # 遗言阶段消息处理 - TODO
+                    logger.info("遗言阶段消息处理功能尚未实现")
+                    # 暂时使用默认消息处理
+                    await self._handle_normal_message(room_id, message_data, user_id)
+                    return
+                elif current_phase == "secret_chat":
+                    # 秘密聊天阶段消息处理 - TODO
+                    logger.info("秘密聊天阶段消息处理功能尚未实现")
+                    # 暂时使用默认消息处理
+                    await self._handle_normal_message(room_id, message_data, user_id)
+                    return
 
             # 检查是否是AI消息
             contains_ai_mention = False
@@ -234,19 +259,23 @@ class MessageService:
             username = user_info.get("username", message_data.get("username", "Unknown"))
 
             # 创建消息对象
-            message = {
-                "id": str(uuid.uuid4()),
-                "user_id": user_id,
-                "username": username,  # 使用username而不是username
-                "content": content,
-                "timestamp": int(time.time() * 1000),  # 使用毫秒时间戳
-            }
+            message = Message(
+                user_id=user_id,
+                username=username,
+                content=content,
+                timestamp=int(time.time() * 1000),
+                is_system=False,
+                round=message_data.get("round", "0")  # 使用消息中的round属性，默认为"0"
+            )
 
             logger.info(f"创建消息对象: {message}")
 
+            # 将消息对象转换为字典
+            message_dict = message.dict()
+            
             # 使用pipeline存储消息
             pipe = await self.redis_client.pipeline()
-            pipe.lpush(f"room:{room_id}:messages", json.dumps(message))
+            pipe.lpush(f"room:{room_id}:messages", json.dumps(message_dict))
             pipe.expire(f"room:{room_id}:messages", 24 * 60 * 60)
             logger.info("执行Redis pipeline")
             await pipe.execute()
@@ -254,13 +283,15 @@ class MessageService:
             # 广播消息到房间（如果skip_broadcast为True则跳过）
             if not skip_broadcast:
                 logger.info(f"广播消息到房间 {room_id}")
-                await self.websocket_manager.broadcast_message(invite_code=room_id, message={
+                broadcast_message = {
                     "type": "chat",  # 明确指定消息类型
-                    "user_id": user_id,
-                    "username": username,  # 使用username而不是username
-                    "content": content,
-                    "timestamp": int(time.time() * 1000),
-                }, is_special=False)
+                    **message_dict   # 包含所有Message字段
+                }
+                await self.websocket_manager.broadcast_message(
+                    invite_code=room_id, 
+                    message=broadcast_message, 
+                    is_special=False
+                )
                 logger.info("消息广播成功")
             else:
                 logger.info(f"跳过广播到房间 {room_id}，消息已在队列处理前广播")
@@ -278,9 +309,8 @@ class MessageService:
                 logger.error(f"发送错误消息失败: {str(broadcast_error)}")
 
 
-    # AI消息处理
     async def handle_ai_mention(self, room_id: str, message_data: Dict[str, Any], user_id: str) -> None:
-        """处理AI提及的消息"""
+        """处理提及AI的消息(@的情况)"""
         try:
             # 生成时间戳作为唯一标识
             timestamp = int(time.time() * 1000)
@@ -351,11 +381,21 @@ class MessageService:
             # 跟踪上一个块的末尾字符，用于识别跨块的连续换行
             last_chunk_end = ""
             
+            # 获取房间基本信息，包括speak_time
+            room_data = await self.redis_client.get_room_basic_data(room_id)
+            speak_time = int(room_data.get("speak_time", 60)) if room_data else 60
+            
+            # 构建游戏信息字典，包含发言时间限制
+            game_info = {
+                "speak_time": speak_time
+            }
+            
             # 调用LLM处理消息
             async for chunk in self.llm_service.chat_completion(
                 messages=chat_history,
                 current_message=message_data.get("content", ""),
-                context_type="normal_chat"  # 默认使用普通聊天场景
+                context_type="normal_chat",  # 默认使用普通聊天场景
+                game_info=game_info  # 传递游戏信息
             ):
                 # 累积完整响应
                 full_ai_response += chunk
@@ -450,39 +490,6 @@ class MessageService:
                 "message": f"AI处理失败: {str(e)}",
                 "timestamp": int(time.time() * 1000)
             }, is_special=False)
-
-    async def _stream_ai_response_to_frontend(self, room_id: str, chunk: str, is_start: bool, is_end: bool) -> None:
-        """
-        将AI响应流式传输到前端
-
-        Args:
-            room_id: 房间ID
-            chunk: 消息内容片段
-            is_start: 是否是开始
-            is_end: 是否是结束
-        """
-        try:
-            # 预处理消息块，去除多余空行
-            chunk = re.sub(r'\n{3,}', '\n\n', chunk)
-            
-            # 生成时间戳作为唯一ID
-            timestamp = int(time.time() * 1000)
-
-            # 构造流式消息格式 - 确保只有一个消息会话从开始到结束
-            stream_message = {
-                "timestamp": timestamp,
-                "type": "ai_stream",    #   标识当前是什么情况的AI返回(ai_stream, secret_channel, game_chat)
-                "is_start": is_start,
-                "is_end": is_end,
-                "content": chunk,
-                "session_id": f"ai_session_{room_id}_{timestamp}" if is_start else None  # 仅在开始时创建会话ID
-            }
-
-            # 广播到房间
-            await self.websocket_manager.broadcast_message(invite_code=room_id, message=stream_message,
-                                                           is_special=False)
-        except Exception as e:
-            logger.error(f"流式传输AI响应失败: {str(e)}")
 
     async def _save_completed_ai_response(self, room_id: str, message_id: str, content: str, is_secret: bool = False) -> None:
         """
@@ -762,8 +769,7 @@ class MessageService:
             messages = await self.redis_client.get_secret_channel_messages(room_id, limit)
             
             # 过滤消息（仅返回与该用户相关的消息）
-            # 这里需要根据具体实现来确定如何过滤
-            # 暂时以用户ID作为筛选条件，实际可能需要根据target_users等字段判断
+            # 以用户ID作为筛选条件
             filtered_messages = []
             for message in messages:
                 # 如果是该用户发送的消息或发给该用户的消息
@@ -784,3 +790,106 @@ class MessageService:
                 "success": False,
                 "message": f"获取秘密频道消息失败: {str(e)}"
             }
+
+    async def _handle_speaking_phase_message(self, room_id: str, message_data: dict, user_id: str) -> None:
+        """
+        处理发言阶段的消息 - 前端已完成验证
+        """
+        try:
+            # 获取当前发言者
+            current_speaker = await self.redis_client.zrange(f"room:{room_id}:alive_players", 0, 0)
+            
+            if not current_speaker or current_speaker[0] != user_id:
+                # 不是当前发言者，忽略消息
+                logger.warning(f"用户 {user_id} 在不是其发言轮次时尝试发言")
+                return
+            
+            # 获取当前回合信息
+            room_data = await self.redis_client.get_room_basic_data(room_id)
+            current_round = room_data.get("current_round", "1")
+            
+            # 添加回合信息到消息数据
+            message_data["round"] = current_round
+            
+            # 处理并广播消息 - 验证已由前端完成
+            await self._handle_normal_message(room_id, message_data, user_id)
+            
+            # 通知游戏服务进入下一个发言者
+            if self.game_service:
+                await self.game_service.move_to_next_speaker(room_id)
+            else:
+                logger.error("无法访问game_service，无法推进发言轮次")
+            
+        except Exception as e:
+            logger.error(f"处理发言阶段消息失败: {str(e)}")
+
+    async def _handle_voting_phase_message(self, room_id: str, message_data: dict, user_id: str) -> None:
+        """
+        处理投票阶段的消息
+        
+        Args:
+            room_id: 房间ID
+            message_data: 消息数据
+            user_id: 用户ID
+        """
+        try:
+            # 获取消息内容
+            content = message_data.get("content", "").strip()
+            
+            # 检查是否是投票命令
+            if content.startswith("/vote"):
+                # 尝试解析投票命令 (格式: /vote user_id)
+                parts = content.split()
+                if len(parts) > 1:
+                    target_id = parts[1]
+                    
+                    # 调用GameService处理投票
+                    if self.game_service:
+                        # 默认投票时间为0
+                        result = await self.game_service.handle_player_vote(room_id, user_id, target_id, 0.0)
+                        
+                        # 发送处理结果反馈
+                        if result.get("success", False):
+                            # 投票成功
+                            system_message = f"你成功投票给了 {target_id}"
+                        else:
+                            # 投票失败
+                            system_message = f"投票失败: {result.get('message', '未知错误')}"
+                            
+                        # 向投票者发送私人消息
+                        await self.websocket_manager.broadcast_message(
+                            invite_code=room_id,
+                            message={
+                                "type": "system",
+                                "content": system_message,
+                                "timestamp": int(time.time() * 1000)
+                            },
+                            is_special=True,
+                            target_users={user_id}
+                        )
+                    else:
+                        logger.error("无法访问game_service，无法处理投票")
+                else:
+                    # 投票命令格式错误，发送提示
+                    await self.websocket_manager.broadcast_message(
+                        invite_code=room_id,
+                        message={
+                            "type": "system",
+                            "content": "投票命令格式错误，请使用 /vote user_id",
+                            "timestamp": int(time.time() * 1000)
+                        },
+                        is_special=True,
+                        target_users={user_id}
+                    )
+            else:
+                # 非投票命令，按正常消息处理
+                await self._handle_normal_message(room_id, message_data, user_id)
+                
+        except Exception as e:
+            logger.error(f"处理投票阶段消息失败: {str(e)}")
+
+    def set_game_service(self, game_service):
+        """设置游戏服务，避免循环依赖"""
+        self.game_service = game_service
+        logger.info("MessageService已连接到GameService")
+

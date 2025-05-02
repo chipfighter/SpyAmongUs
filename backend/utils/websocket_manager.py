@@ -146,7 +146,7 @@ class WebSocketManager:
             invite_code: 房间ID
             message: 消息内容
             is_special: 消息是否特殊（secret_channel或其他情况）
-            target_users: 目标用户集合
+            target_users: 目标用户集合（配合is_special参数来看，如果不是特殊转发消息，那么不需要target_users，默认全房间用户）
 
         Notes:
             提供给message_service以及room_service来转发

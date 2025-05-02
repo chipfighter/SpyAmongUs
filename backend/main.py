@@ -40,11 +40,10 @@ from utils.logger_utils import setup_logger, get_logger
 from config import (
     APP_HOST, APP_PORT, DEBUG,
     USER_STATUS_ONLINE, MIN_PLAYERS, MIN_SPY_COUNT, MAX_ROUNDS, MAX_SPEAK_TIME, MAX_LAST_WORDS_TIME,
-    USER_STATUS_IN_ROOM
+    USER_STATUS_IN_ROOM, ROOM_KEY_PREFIX
 )
 from utils.websocket_manager import WebSocketManager
 from services.message_service import MessageService
-from services.game_service import GameService
 
 # 配置日志（当前根路径是）
 setup_logger("SpyAmongUs")
@@ -97,6 +96,13 @@ auth_service = AuthService()
 
 # 设置服务之间的依赖关系
 room_service.set_message_service(message_service)
+# 获取GameService实例
+game_service = room_service.game_service
+# MessageService和GameService之间的双向引用
+message_service.set_game_service(game_service)
+game_service.set_message_service(message_service)
+# 设置GameService的LLM Pipeline
+game_service.set_llm_pipeline(llm_pipeline)
 
 # 验证token中间件
 @app.middleware("http")
@@ -368,6 +374,21 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             "timestamp": int(time.time() * 1000)
         })
         logger.info(f"已向用户 {user_id} 发送WebSocket连接成功消息 (含上下文)")
+        
+        # 获取房间用户列表，并发送给客户端
+        try:
+            room_data = await room_service.get_room_data_users(room_id)
+            if room_data["success"] and "room_data" in room_data["data"]:
+                users_list = room_data["data"]["room_data"].get("users", [])
+                # 发送user_list_update消息给刚连接的客户端
+                await websocket.send_json({
+                    "type": "user_list_update",
+                    "users": users_list,
+                    "timestamp": int(time.time() * 1000)
+                })
+                logger.info(f"已向用户 {user_id} 发送房间用户列表，共 {len(users_list)} 名用户")
+        except Exception as e:
+            logger.error(f"发送房间用户列表失败: {str(e)}")
 
         # 5.监听消息
         while True:
@@ -444,6 +465,112 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             },
                             is_special=False
                         )
+                        
+                        continue
+                    
+                    # 处理遗言消息
+                    if message_data.get("type") == "last_words":
+                        logger.info(f"处理玩家遗言: {message_data}")
+                        
+                        # 调用游戏服务处理遗言
+                        result = await room_service.game_service.handle_last_words(
+                            room_id=room_id,
+                            player_id=user_id,
+                            message=message_data
+                        )
+                        
+                        # 检查处理结果
+                        if not result.get("success", False):
+                            error_msg = result.get("message", "处理遗言失败")
+                            logger.error(f"遗言处理失败: {error_msg}")
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": error_msg,
+                                "timestamp": int(time.time() * 1000)
+                            })
+                        
+                        continue
+                    
+                    # 处理放弃遗言消息
+                    if message_data.get("type") == "skip_last_words":
+                        logger.info(f"玩家 {user_id} 放弃遗言")
+                        
+                        # 获取房间基本信息
+                        room_key = f"{ROOM_KEY_PREFIX}{room_id}"
+                        room_data = await redis_client.get_room_basic_data(room_id)
+                        last_words_player = room_data.get("last_words_player")
+                        
+                        # 检查是否是当前遗言玩家
+                        if last_words_player != user_id:
+                            logger.warning(f"玩家 {user_id} 无权放弃遗言，当前遗言玩家为 {last_words_player}")
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": "你没有权限放弃遗言",
+                                "timestamp": int(time.time() * 1000)
+                            })
+                            continue
+                        
+                        # 广播玩家放弃遗言消息
+                        await websocket_manager.broadcast_message(
+                            room_id,
+                            {
+                                "type": "last_words_skipped",
+                                "player_id": user_id,
+                                "message": "玩家放弃遗言",
+                                "timestamp": int(time.time() * 1000)
+                            },
+                            is_special=False
+                        )
+                        
+                        # 清除遗言玩家信息
+                        await redis_client.hdel(room_key, "last_words_player")
+                        
+                        # 等待1.5秒，保持与正常遗言流程一致
+                        await asyncio.sleep(1.5)
+                        
+                        # 检查游戏是否结束
+                        game_end_result = await room_service.game_service.check_game_end_condition(room_id)
+                        
+                        if game_end_result["game_end"]:
+                            # 游戏结束，广播游戏结果
+                            await room_service.game_service.broadcast_game_result(room_id, game_end_result)
+                        else:
+                            # 游戏未结束，进入下一轮
+                            await room_service.game_service.start_next_round(room_id)
+                        
+                        continue
+                    
+                    # 处理投票消息
+                    if message_data.get("type") == "vote":
+                        logger.info(f"收到玩家 {user_id} 的投票消息: {message_data}")
+                        
+                        # 获取投票目标ID
+                        target_id = message_data.get("target_id")
+                        if not target_id:
+                            logger.warning(f"玩家 {user_id} 发送的投票消息缺少target_id")
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": "投票消息缺少目标玩家ID",
+                                "timestamp": int(time.time() * 1000)
+                            })
+                            continue
+                        
+                        # 调用游戏服务处理投票
+                        result = await room_service.game_service.handle_player_vote(
+                            room_id=room_id,
+                            voter_id=user_id,
+                            target_id=target_id
+                        )
+                        
+                        # 检查处理结果
+                        if not result.get("success", False):
+                            error_msg = result.get("message", "处理投票失败")
+                            logger.error(f"处理投票失败: {error_msg}")
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": error_msg,
+                                "timestamp": int(time.time() * 1000)
+                            })
                         
                         continue
                     
@@ -920,6 +1047,60 @@ async def update_ready_status(invite_code: str, request: Request):
     else:
         logger.warning(f"用户 {user_id} 在房间 {invite_code} 切换准备状态失败: {result['message']}")
         raise HTTPException(status_code=400, detail=result["message"])
+
+# 添加投票API
+@app.post("/api/room/{invite_code}/vote")
+async def submit_vote(invite_code: str, vote_data: Dict[str, Any], request: Request):
+    """
+    提交玩家投票
+    
+    Args:
+        invite_code: 房间邀请码
+        vote_data: 投票数据，包含target_id和vote_time
+    """
+    try:
+        # 1. 验证用户身份和权限
+        user_id = request.state.user_id
+        username = request.state.username
+        
+        if not user_id:
+            logger.warning(f"未授权的投票请求: {invite_code}")
+            return JSONResponse(
+                status_code=401,
+                content={"status": "error", "message": "未授权的请求"}
+            )
+        
+        # 2. 获取投票目标和时间
+        target_id = vote_data.get("target_id")
+        vote_time = vote_data.get("vote_time", 0.0)
+        
+        if not target_id:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "缺少投票目标ID"}
+            )
+        
+        # 3. 处理投票
+        game_result = await game_service.handle_player_vote(invite_code, user_id, target_id)
+        
+        # 4. 返回处理结果
+        if game_result.get("success", False):
+            return JSONResponse(
+                status_code=200,
+                content={"status": "success", "message": game_result.get("message", "投票成功"), "data": game_result.get("data", {})}
+            )
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": game_result.get("message", "投票失败")}
+            )
+        
+    except Exception as e:
+        logger.error(f"处理投票请求失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"服务器错误: {str(e)}"}
+        )
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, reload=DEBUG)

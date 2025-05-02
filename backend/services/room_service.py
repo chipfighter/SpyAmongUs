@@ -42,7 +42,8 @@ class RoomService:
         self.message_service = None
         self.countdown_tasks = {}  # 房间ID -> asyncio任务的映射
         self.game_service = GameService(self.redis_client, self.websocket_manager)
-
+        if redis_client and websocket_manager:
+            logger.info("RoomService已初始化")
 
     def set_message_service(self, message_service):
         """设置消息服务，避免循环依赖"""
@@ -113,6 +114,31 @@ class RoomService:
                         room_id=room.invite_code,
                         content=f"房间 \"{room_name}\" 已创建，等待其他玩家加入..."
                     )
+                    
+                # 构建房主的用户信息，用于广播用户列表
+                if self.websocket_manager:
+                    try:
+                        # 获取新创建房间的房主信息
+                        host_user = {
+                            "id": host_id,
+                            "username": user_data.get("username", "房主"),
+                            "avatar_url": user_data.get("avatar_url", "/default_avatar.jpg"),
+                            "status": USER_STATUS_IN_ROOM
+                        }
+                        
+                        # 广播用户列表更新（此时只有房主一人）
+                        await self.websocket_manager.broadcast_message(
+                            invite_code=room.invite_code,
+                            message={
+                                "type": "user_list_update",
+                                "users": [host_user],
+                                "timestamp": int(time.time() * 1000)
+                            },
+                            is_special=False
+                        )
+                        logger.info(f"已向房间 {room.invite_code} 广播初始用户列表（房主）")
+                    except Exception as e:
+                        logger.error(f"广播房主信息失败: {str(e)}")
 
                 return {
                     "success": True,
@@ -329,6 +355,25 @@ class RoomService:
                     is_special=False, 
                     target_users=None
                 )
+                
+                # 7. 获取并广播最新的用户列表给所有人
+                try:
+                    room_data = await self.get_room_data_users(invite_code)
+                    if room_data["success"] and "room_data" in room_data["data"]:
+                        users_list = room_data["data"]["room_data"].get("users", [])
+                        # 广播user_list_update消息给房间内所有用户
+                        await self.websocket_manager.broadcast_message(
+                            invite_code=invite_code,
+                            message={
+                                "type": "user_list_update",
+                                "users": users_list,
+                                "timestamp": int(time.time() * 1000)
+                            },
+                            is_special=False
+                        )
+                        logger.info(f"已向房间 {invite_code} 的所有用户广播最新用户列表，共 {len(users_list)} 名用户")
+                except Exception as e:
+                    logger.error(f"广播用户列表失败: {str(e)}")
 
             return {
                 "success": True,
@@ -436,80 +481,80 @@ class RoomService:
                          return await self.delete_room(invite_code, operator_id=user_id, notify_users=False, reason="转移房主失败，房间关闭")
 
                 # 更新房间的房主信息
+                room.host_id = next_host_id
                 await self.redis_client.update_room_host(invite_code, next_host_id)
-
-                # 获取新旧房主名字用于通知
-                user_info = await self.user_service.get_user_info(user_id)
-                next_host_info = await self.user_service.get_user_info(next_host_id)
-                former_host_name = user_info["data"].get("username", "前房主") if user_info["success"] else "前房主"
-                new_host_name = next_host_info["data"].get("username", "新房主") if next_host_info["success"] else "新房主"
-
-            # 5. 从房间中移除用户
-            success = await self.redis_client.delete_room_user(invite_code, user_id)
-            if not success:
-                # 即使移除失败，也尝试清理用户状态
-                await self.user_service.update_current_room(user_id, None)
-                await self.user_service.update_user_status(user_id, USER_STATUS_ONLINE)
-                return {
-                    "success": False,
-                    "message": "退出房间失败"
-                }
-
-            # 从准备用户集合中移除用户
-            await self.redis_client.remove_user_from_ready_set(invite_code, user_id)
-            
-            # 6.如果存在倒计时任务，删除这个任务
-            if invite_code in self.countdown_tasks:
-                self.countdown_tasks[invite_code].cancel()
-                del self.countdown_tasks[invite_code]
                 
-                # 广播倒计时取消消息
+                # 获取新旧房主的用户名（用于通知消息）
+                user_leaving_name = user_info["data"].get("username", "前房主") if user_info["success"] else former_host_name
+                
+                next_host_info = await self.user_service.get_user_info(next_host_id)
+                next_host_name = next_host_info["data"].get("username", "新房主") if next_host_info["success"] else new_host_name
+                
+                # 广播房主变更消息
                 if self.websocket_manager:
                     await self.websocket_manager.broadcast_message(
-                        invite_code=invite_code, 
+                        invite_code=invite_code,
                         message={
-                            "type": "countdown_cancelled", 
-                            "reason": "有玩家离开房间"
+                            "type": "host_leave",
+                            "user_id": user_id,
+                            "new_host_id": next_host_id,
+                            "content": f"前房主 {user_leaving_name} 离开了房间，{next_host_name} 成为新房主",
+                            "timestamp": int(time.time() * 1000)
                         },
                         is_special=False
                     )
-
-            # 6. 清理该用户的状态 (无论是否房主)
+            else:
+                # 普通用户离开
+                # 获取离开用户的用户名
+                user_leaving_name = user_info["data"].get("username", "某用户") if user_info["success"] else "某用户"
+                
+                # 广播用户离开消息
+                if self.websocket_manager:
+                    await self.websocket_manager.broadcast_message(
+                        invite_code=invite_code,
+                        message={
+                            "type": "user_leave",
+                            "user_id": user_id,
+                            "content": f"用户 {user_leaving_name} 离开了房间",
+                            "timestamp": int(time.time() * 1000)
+                        },
+                        is_special=False
+                    )
+            
+            # 清理用户状态
             await self.user_service.update_current_room(user_id, None)
             await self.user_service.update_user_status(user_id, USER_STATUS_ONLINE)
-
-            # 7. 发送通知和广播
-            # 获取离开用户的用户名
-            leaving_username = former_host_name if is_leaving_host else (await self.user_service.get_user_info(user_id))['data'].get('username', '用户')
             
-            # 准备广播内容
-            broadcast_message = {
-                "type": "user_leave",
-                "user_id": user_id,
-                "content": f"用户 {leaving_username} 退出了房间",
-                "timestamp": int(time.time() * 1000)
-            }
+            # 从准备用户集合中移除该用户
+            await self.redis_client.remove_user_from_ready_set(invite_code, user_id)
             
-            # 如果是房主离开，需要添加新房主ID
-            if is_leaving_host:
-                broadcast_message["type"] = "host_leave"
-                broadcast_message["new_host_id"] = next_host_id
-                broadcast_message["content"] = f"{former_host_name} 退出了房间，{new_host_name} 成为新的房主"
-
-            # 发送系统消息和广播
-            if self.message_service:
-                pass
+            # 从房间用户集合中移除该用户
+            await self.redis_client.delete_room_user(invite_code, user_id)
+            
+            # 广播更新后的用户列表
             if self.websocket_manager:
-                await self.websocket_manager.broadcast_message(
-                    invite_code=invite_code, 
-                    message=broadcast_message,
-                    is_special=False, 
-                    target_users=None
-                )
-
+                try:
+                    # 获取最新的用户列表
+                    room_data = await self.get_room_data_users(invite_code)
+                    if room_data["success"] and "room_data" in room_data["data"]:
+                        users_list = room_data["data"]["room_data"].get("users", [])
+                        # 广播user_list_update消息
+                        await self.websocket_manager.broadcast_message(
+                            invite_code=invite_code,
+                            message={
+                                "type": "user_list_update",
+                                "users": users_list,
+                                "timestamp": int(time.time() * 1000)
+                            },
+                            is_special=False
+                        )
+                        logger.info(f"用户离开后广播更新用户列表，共 {len(users_list)} 名用户")
+                except Exception as e:
+                    logger.error(f"广播更新用户列表失败: {str(e)}")
+            
             return {
                 "success": True,
-                "message": "成功退出房间"
+                "message": "已退出房间"
             }
 
         except Exception as e:

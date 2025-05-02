@@ -110,14 +110,28 @@ export const useWebsocketStore = defineStore('websocket', {
       }
     },
     sendMessage(messageObject) {
-      if (this.connectionStatus !== 'connected' || !this.socket) {
-        console.error('[WS] 发送失败：连接未建立');
+      console.log('[WS] 尝试发送消息:', messageObject);
+      
+      if (!this.socket) {
+        console.error('[WS] 发送失败：WebSocket对象不存在');
         return false;
       }
+      
+      if (this.connectionStatus !== 'connected') {
+        console.error('[WS] 发送失败：连接状态异常，当前状态:', this.connectionStatus);
+        return false;
+      }
+      
+      if (this.socket.readyState !== WebSocket.OPEN) {
+        console.error('[WS] 发送失败：WebSocket未准备好，readyState =', this.socket.readyState);
+        return false;
+      }
+      
       try {
         const messageString = JSON.stringify(messageObject);
+        console.log('[WS] 准备发送JSON消息:', messageString);
         this.socket.send(messageString);
-        console.log('[WS] 发送消息:', messageObject);
+        console.log('[WS] 消息发送成功');
         return true;
       } catch (error) {
         console.error('[WS] 发送消息失败:', error, messageObject);
@@ -182,6 +196,7 @@ export const useWebsocketStore = defineStore('websocket', {
       }
       
       const chatStoreForAI = useChatStore();
+      const roomStore = useRoomStore();
       
       // 获取或创建会话数据
       let sessionData = this.activeAiSessions.get(sessionId);
@@ -199,6 +214,25 @@ export const useWebsocketStore = defineStore('websocket', {
           };
           this.activeAiSessions.set(sessionId, sessionData);
           
+          // 处理AI玩家名称 - 检查消息是否来自AI玩家
+          let username = 'AI助理';
+          let avatarUrl = '/default_room_robot_avatar.jpg';
+          
+          // 如果消息包含AI玩家ID，则使用对应的AI玩家名称
+          if (data.user_id && data.user_id.startsWith('llm_player_')) {
+            const aiNumber = data.user_id.replace('llm_player_', '');
+            username = `AI玩家_${aiNumber}`;
+            
+            // 从房间store获取更多信息
+            const aiPlayer = roomStore.users.find(u => u.id === data.user_id);
+            if (aiPlayer) {
+              username = aiPlayer.username || username;
+              avatarUrl = aiPlayer.avatar_url || avatarUrl;
+            }
+            
+            console.log(`[WS] AI玩家消息: ${username}, ID: ${data.user_id}`);
+          }
+          
           // 创建新的AI消息对象
           const aiMessage = {
             id: sessionId, 
@@ -209,8 +243,9 @@ export const useWebsocketStore = defineStore('websocket', {
             is_end: data.is_end,     // 保留原始标记
             timestamp: sessionData.timestamp,
             sessionId: sessionId,
-            username: 'AI助理', 
-            avatar_url: '/default_room_robot_avatar.jpg' 
+            username: username,       // 使用动态计算的用户名
+            avatar_url: avatarUrl,    // 使用动态头像
+            user_id: data.user_id     // 保存用户ID以便后续更新
           };
           
           // 添加消息到聊天存储
@@ -286,39 +321,50 @@ export const useWebsocketStore = defineStore('websocket', {
     
     // 处理其他类型的消息
     processOtherMessage(data) {
-        const roomStore = useRoomStore();
-        const chatStore = useChatStore();
+      const chatStore = useChatStore();
+      const roomStore = useRoomStore();
+      const userStore = useUserStore();
 
-        switch (data.type) {
-          case 'system':
+      console.log('[WS] 处理其他类型消息:', data);
+      
+      switch (data.type) {
+        case 'system':
           let systemContent = '系统消息';
-            if (data.event === 'connected') {
-              if (data.context === 'create' && data.room_name) {
-                systemContent = `您已创建了"${data.room_name}"房间`;
-              } else if (data.context === 'join' && data.room_name) {
-                systemContent = `您已加入"${data.room_name}"房间`;
-              } else {
+          if (data.event === 'connected') {
+            if (data.context === 'create' && data.room_name) {
+              systemContent = `您已创建了"${data.room_name}"房间`;
+            } else if (data.context === 'join' && data.room_name) {
+              systemContent = `您已加入"${data.room_name}"房间`;
+            } else {
               systemContent = '已连接到房间';
-              }
-            } else if (data.message) {
-              systemContent = data.message;
-            } else if (data.content) {
-              systemContent = data.content;
             }
-            chatStore.addMessage({
-              is_system: true,
-              content: systemContent,
-              timestamp: data.timestamp || Date.now()
-            });
-            break;
-          case 'secret':
-            chatStore.addSecretMessage(data);
-            break;
+          } else if (data.message) {
+            systemContent = data.message;
+          } else if (data.content) {
+            systemContent = data.content;
+          }
+          chatStore.addMessage({
+            is_system: true,
+            content: systemContent,
+            timestamp: data.timestamp || Date.now()
+          });
+          break;
+        case 'secret':
+          chatStore.addSecretMessage(data);
+          break;
         case 'user_list_update':
-          roomStore.updateUserList(data.users);
-            break;
-          case 'user_join':
-          case 'user_leave':
+          if (data.users && Array.isArray(data.users)) {
+            console.log(`[WS] 收到用户列表更新: ${data.users.length} 名用户`);
+            data.users.forEach((user, index) => {
+              console.log(`  用户 ${index + 1}: id=${user?.id}, username=${user?.username}`);
+            });
+            roomStore.updateUserList(data.users);
+          } else {
+            console.warn('[WS] 收到的用户列表更新消息格式不正确:', data);
+          }
+          break;
+        case 'user_join':
+        case 'user_leave':
         case 'host_leave':
           // 用户加入/离开消息处理
           console.log(`[WS] 收到${data.type === 'user_join' ? '用户加入' : (data.type === 'host_leave' ? '房主离开' : '用户离开')}消息:`, data);
@@ -357,29 +403,52 @@ export const useWebsocketStore = defineStore('websocket', {
           
           // 添加系统消息通知
           if (data.content) {
-                chatStore.addMessage({ 
-                    is_system: true, 
+            chatStore.addMessage({ 
+                is_system: true, 
               content: data.content,
-                    timestamp: data.timestamp || Date.now() 
-                });
-            }
-            break;
+                timestamp: data.timestamp || Date.now() 
+            });
+          }
+          break;
         case 'user_ready':
           roomStore.updateReadyStatus(data);
           break;
         case 'user_ready_update': 
             roomStore.updateReadyStatus(data);
             break;
-          case 'game_start':
-            roomStore.setGameStatus(true);
+        case 'game_start':
+          roomStore.setGameStatus(true);
           // 可能需要导航到游戏界面或更新UI
           console.log('[WS] Game started!');
-            break;
-        case 'game_over':
-            roomStore.setGameStatus(false);
-          // 显示游戏结果?
-          console.log('[WS] Game over!');
-            break;
+          break;
+        case 'game_end':
+          // 处理游戏结束消息
+          console.log('[WS] 游戏结束:', data);
+          
+          // 更新房间状态
+          roomStore.setGameStatus(false);
+          
+          // 添加游戏结束系统消息
+          const winningRoleName = data.winning_role === 'civilian' ? '平民' : '卧底';
+          chatStore.addMessage({
+            is_system: true,
+            content: `游戏结束，${winningRoleName}阵营获胜！`,
+            timestamp: data.timestamp || Date.now()
+          });
+
+          // 记录所有玩家角色
+          if (data.roles) {
+            Object.entries(data.roles).forEach(([playerId, role]) => {
+              roomStore.handlePlayerEliminated(playerId, role);
+            });
+          }
+          
+          // 触发游戏结算弹窗显示
+          document.dispatchEvent(new CustomEvent('game-result', { 
+            detail: data
+          }));
+          
+          break;
         case 'countdown_start':
             // 处理倒计时开始消息
             console.log('[WS] 倒计时开始:', data);
@@ -441,26 +510,296 @@ export const useWebsocketStore = defineStore('websocket', {
               detail: data
             }));
             break;
+        case 'player_voted':
+            // 处理玩家投票消息
+            console.log('[WS] 收到玩家投票消息:', data);
+            
+            // 更新投票信息
+            if (data.vote_count) {
+              roomStore.updateVoteCount(data.vote_count);
+            }
+            
+            // 记录谁投票给谁
+            if (data.voter_id && data.target_id) {
+              roomStore.recordVote(data.voter_id, data.target_id);
+            }
+            
+            // 系统消息已由后端通过另一条消息发送，不需要在这里添加
+            break;
+        case 'vote_phase_start':
+            // 处理投票阶段开始消息
+            console.log('[WS] 投票阶段开始:', data);
+            
+            // 清除之前的投票记录
+            roomStore.clearVotes();
+            
+            // 注意：不应该直接设置roomStore.currentPhase，而应该调用updateGamePhase方法
+            // roomStore.currentPhase = 'voting'; // 错误的方式
+            // 更新当前游戏阶段
+            roomStore.updateGamePhase('voting');
+            console.log('[WS] 通过updateGamePhase设置投票阶段:', roomStore.gamePhase);
+            
+            // 额外检查游戏状态
+            if (!roomStore.gameStarted) {
+              roomStore.gameStarted = true;
+              console.log('[WS] 确保游戏已开始状态');
+            }
+            
+            // 更新回合数
+            if (data.current_round) {
+              roomStore.updateGameRound(data.current_round);
+            }
+            
+            // 显示系统消息
+            chatStore.addMessage({
+              is_system: true,
+              content: `投票阶段开始，请选择你怀疑的玩家进行投票。投票时间：${data.vote_timeout || 10}秒`,
+              timestamp: data.timestamp || Date.now()
+            });
+            
+            // 派发事件通知组件处理UI更新
+            document.dispatchEvent(new CustomEvent('vote-phase-start', { 
+              detail: data
+            }));
+            
+            // 检查更新后的状态
+            setTimeout(() => {
+              console.log('[WS] 投票阶段设置后检查状态:', {
+                gamePhase: roomStore.gamePhase,
+                gameStarted: roomStore.gameStarted
+              });
+            }, 100);
+            
+            break;
+        case 'player_eliminated':
+            // 处理玩家被淘汰消息
+            console.log('[WS] 收到玩家被淘汰消息:', data);
+            
+            // 标记玩家为已淘汰并揭示角色
+            if (data.player_id && data.role) {
+                roomStore.handlePlayerEliminated(data.player_id, data.role);
+                
+                // 如果是当前用户被淘汰，显示特殊提示
+                if (userStore.user && data.player_id === userStore.user.id) {
+                    roomStore.showToast('warning', '你已被淘汰，但仍可以观看游戏进行');
+                    
+                    // 触发事件通知组件更新UI
+                    document.dispatchEvent(new CustomEvent('current-player-eliminated', {
+                        detail: { playerId: data.player_id, role: data.role }
+                    }));
+                }
+            }
+            
+            break;
         case 'role_word_assignment':
             // 处理角色和词语分配消息
             console.log('[WS] 收到角色和词语分配消息:', data);
+            
+            // 确保角色信息正确传递到roomStore
+            if (data.role) {
+              // 如果是自己的角色信息，确保设置正确
+              console.log('[WS] 设置当前用户角色:', data.role);
+              
+              // 确保roles对象存在
+              if (!data.roles) data.roles = {};
+              
+              // 获取当前用户ID
+              const userStore = useUserStore();
+              const currentUserId = userStore.user?.id;
+              
+              // 将自己的角色添加到roles对象中
+              if (currentUserId) {
+                data.roles[currentUserId] = data.role;
+                console.log('[WS] 将当前用户角色添加到roles对象中:', {
+                  userId: currentUserId,
+                  role: data.role,
+                  roles: data.roles
+                });
+              }
+              
+              // 对于普通玩家，确保词语信息正确传递
+              if (data.role === 'civilian' && data.word) {
+                // 为平民玩家添加civilian_word字段
+                data.civilian_word = data.word;
+                console.log('[WS] 为平民补充civilian_word字段:', data.civilian_word);
+              } else if (data.role === 'spy' && data.word) {
+                // 为卧底玩家添加spy_word字段
+                data.spy_word = data.word;
+                console.log('[WS] 为卧底补充spy_word字段:', data.spy_word);
+              }
+            }
+            
+            // 如果消息中含有上帝ID，添加到数据中
+            if (data.god_id) {
+              console.log('[WS] 收到上帝ID:', data.god_id);
+              // 确保roles对象存在
+              if (!data.roles) data.roles = {};
+              // 设置上帝角色
+              data.roles[data.god_id] = 'god';
+            }
+            
             // 设置角色信息
             roomStore.setRoleInfo(data);
+            
+            // 确保isGodPolling状态设置为false
+            if (roomStore.isGodPolling) {
+              console.log('[WS] 角色分配后结束上帝轮询状态');
+              roomStore.setGodPollingStatus(false);
+            }
+            
+            // 如果没有特定阶段，默认设置为speaking
+            if (!data.current_phase && roomStore.gamePhase === '') {
+              console.log('[WS] 角色分配时未指定游戏阶段，默认设置为speaking');
+              roomStore.updateGamePhase('speaking');
+            }
+            
+            // 派发事件通知前端组件关闭游戏初始化动画
+            document.dispatchEvent(new CustomEvent('role-assigned', { 
+              detail: data
+            }));
             break;
         case 'game_initialized':
             // 游戏初始化完成
             console.log('[WS] 游戏初始化完成');
             
-            // 设置游戏状态为已开始
-            roomStore.setGameStatus(true);
+            // 不重复设置游戏状态，因为已在role_word_assignment消息中设置
+            // roomStore.setGameStatus(true);
             
-            // 结束上帝轮询阶段
+            // 如果有游戏阶段和回合数据，更新到roomStore
+            if (data.current_phase) {
+              console.log(`[WS] 游戏初始化: 设置游戏阶段为 ${data.current_phase}`);
+              roomStore.updateGamePhase(data.current_phase);
+              console.log(`[WS] 游戏阶段已更新为: ${roomStore.gamePhase}`);
+            } else {
+              // 默认设置为speaking阶段
+              console.log('[WS] 游戏初始化: 未提供游戏阶段，默认设置为speaking');
+              roomStore.updateGamePhase('speaking');
+            }
+            
+            if (data.current_round) {
+              console.log(`[WS] 游戏初始化: 设置回合为 ${data.current_round}`);
+              roomStore.updateGameRound(data.current_round);
+            } else {
+              // 默认设置为第1回合
+              console.log('[WS] 游戏初始化: 未提供回合数，默认设置为1');
+              roomStore.updateGameRound(1);
+            }
+            
+            // 结束上帝轮询阶段 - 非常重要
+            console.log('[WS] 游戏初始化完成: 结束上帝轮询状态');
             roomStore.setGodPollingStatus(false);
             
             // 发送初始化完成事件，由组件处理UI相关逻辑
             document.dispatchEvent(new CustomEvent('game-initialized', { 
               detail: data
             }));
+            break;
+        case 'game_phase_update':
+            console.log('[WS] 游戏阶段更新:', data);
+            if (data.phase) {
+              console.log(`[WS] 正在更新游戏阶段从 ${roomStore.gamePhase} 到 ${data.phase}`);
+              roomStore.updateGamePhase(data.phase);
+              console.log(`[WS] 游戏阶段已更新为: ${roomStore.gamePhase}`);
+            }
+            if (data.round) {
+              console.log(`[WS] 正在更新游戏回合从 ${roomStore.currentRound} 到 ${data.round}`);
+              roomStore.updateGameRound(data.round);
+              console.log(`[WS] 游戏回合已更新为: ${roomStore.currentRound}`);
+            }
+            
+            // 确保结束上帝轮询状态
+            if (roomStore.isGodPolling) {
+              console.log('[WS] 游戏阶段更新后结束上帝轮询状态');
+              roomStore.setGodPollingStatus(false);
+            }
+            break;
+        case 'speaking_turn':
+            // 广播发言轮次消息，通知前端谁可以发言
+            console.log('[WS] 收到发言轮次消息:', data);
+            
+            // 使用事件系统将消息传递给RoomView组件处理
+            document.dispatchEvent(new CustomEvent('speaking-turn', { 
+              detail: data
+            }));
+            
+            // 如果有提示消息，显示系统提示
+            if (data.message) {
+              chatStore.addMessage({
+                is_system: true,
+                content: data.message,
+                timestamp: data.timestamp || Date.now()
+              });
+            }
+            break;
+        case 'last_words_start':
+            // 处理遗言阶段开始消息
+            console.log('[WS] 遗言阶段开始:', data);
+            
+            // 更新当前游戏阶段
+            roomStore.updateGamePhase('last_words');
+            
+            // 显示系统消息
+            chatStore.addMessage({
+                is_system: true,
+                content: `${data.player_name || '玩家'} 进入遗言阶段，时间：${data.timeout || 10}秒`,
+                timestamp: data.timestamp || Date.now()
+            });
+            
+            // 记录当前遗言玩家ID
+            roomStore.setLastWordsPlayerId(data.player_id);
+            
+            // 检查是否是当前用户，如果是则允许发言
+            const userStore = useUserStore();
+            if (data.player_id === userStore.user?.id) {
+                console.log('[WS] 当前用户可以发表遗言');
+                roomStore.setCanSpeakInLastWords(true);
+            }
+            
+            // 派发事件通知组件处理UI更新
+            document.dispatchEvent(new CustomEvent('last-words-phase-start', { 
+                detail: data
+            }));
+            
+            break;
+        case 'vote_result':
+            // 处理投票结果消息
+            console.log('[WS] 投票结果:', data);
+            
+            // 清除投票状态
+            roomStore.clearVotes();
+            
+            // 显示投票结果消息
+            if (data.result === 'tie') {
+                chatStore.addMessage({
+                    is_system: true,
+                    content: data.message || "投票结束，没有玩家被淘汰",
+                    timestamp: data.timestamp || Date.now()
+                });
+                
+                // 显示通知
+                roomStore.showToast('info', data.message || "投票结束，没有玩家被淘汰");
+            }
+            
+            break;
+        case 'last_words_phase_end':
+            // 处理遗言阶段结束消息
+            console.log('[WS] 遗言阶段结束:', data);
+            
+            // 避免重复处理遗言阶段结束
+            if (roomStore.gamePhase === 'last_words') {
+                // 清除遗言相关状态
+                roomStore.clearLastWordsState();
+                
+                // 显示系统消息
+                chatStore.addMessage({
+                    is_system: true,
+                    content: `遗言阶段结束`,
+                    timestamp: data.timestamp || Date.now()
+                });
+            } else {
+                console.log('[WS] 忽略重复的遗言阶段结束消息，当前游戏阶段:', roomStore.gamePhase);
+            }
+            
             break;
           default:
           console.warn('[WS] 未处理的消息类型:', data.type);
@@ -611,10 +950,30 @@ export const useWebsocketStore = defineStore('websocket', {
       }
     },
     triggerCountdownCancel(reason) {
-      // 找到所有引用此store的组件中的countdownOverlay引用
-      const roomViewInstance = document.querySelector('.room-container')?.__vueParentComponent?.ctx;
-      if (roomViewInstance && roomViewInstance.$refs.countdownOverlay) {
-        roomViewInstance.$refs.countdownOverlay.cancelCountdown();
+      // 使用更可靠的方式查找CountdownOverlay组件
+      console.log('[WS] 触发倒计时取消:', reason);
+      
+      try {
+        // 1: 尝试通过Vue组件树查找
+        const roomViewInstance = document.querySelector('.room-container')?.__vueParentComponent?.ctx;
+        if (roomViewInstance && roomViewInstance.$refs.countdownOverlay) {
+          console.log('[WS] 找到CountdownOverlay引用，调用cancelCountdown');
+          roomViewInstance.$refs.countdownOverlay.cancelCountdown();
+        } else {
+          // 2: 直接通过DOM操作查找所有倒计时覆盖层并隐藏
+          console.log('[WS] 未找到CountdownOverlay引用，尝试通过DOM查找');
+          const overlays = document.querySelectorAll('.countdown-overlay');
+          if (overlays.length > 0) {
+            console.log('[WS] 通过DOM找到', overlays.length, '个倒计时覆盖层');
+            overlays.forEach(overlay => {
+              overlay.style.display = 'none';
+            });
+          } else {
+            console.warn('[WS] 未找到任何倒计时覆盖层元素');
+          }
+        }
+      } catch (error) {
+        console.error('[WS] 取消倒计时时出错:', error);
       }
       
       // 显示取消原因的系统消息

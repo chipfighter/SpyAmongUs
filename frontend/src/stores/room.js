@@ -24,6 +24,17 @@ const getDefaultState = () => ({
   roles: null,
   currentRole: '',
   spyTeammates: [],
+  gamePhase: 'speaking',
+  currentRound: 1,
+  civilianWord: '',
+  spyWord: '',
+  // 添加投票相关状态
+  voteCount: {},
+  votedPlayers: {}, // 记录谁投票给谁
+  // 添加遗言相关状态
+  lastWordsPlayerId: null,
+  canSpeakInLastWords: false,
+  previousGamePhase: null
 })
 
 export const useRoomStore = defineStore('room', {
@@ -371,9 +382,12 @@ export const useRoomStore = defineStore('room', {
     },
     // --- State Management ---
     clearRoomState() {
-      console.log('[RoomStore] Clearing room state');
-      // 重置为默认状态
-      Object.assign(this, getDefaultState());
+      console.log('[RoomStore] 清理房间状态');
+      const newState = getDefaultState();
+      for (const key in newState) {
+        this[key] = newState[key];
+      }
+      console.log('[RoomStore] 房间状态已重置');
     },
     
     // 处理上帝角色询问
@@ -450,18 +464,189 @@ export const useRoomStore = defineStore('room', {
     setRoleInfo(roleData) {
       console.log('[RoomStore] 设置角色信息', roleData);
       
-      if (roleData.role) {
-        this.currentRole = roleData.role;
+      // 保存角色信息
+      this.roles = roleData.roles || {};
+      this.currentRole = roleData.role || '';
+      this.spyTeammates = roleData.spy_teammates || [];
+      
+      // 根据角色类型处理词语
+      if (this.currentRole === 'civilian') {
+        // 这里平民的词语从 civilian_word 中获取
+        this.civilianWord = roleData.civilian_word || '';
+        console.log('[RoomStore] 设置平民词语:', this.civilianWord);
+      } else if (this.currentRole === 'spy') {
+        // 间谍的词语取自 spy_word
+        this.spyWord = roleData.spy_word || '';
+        console.log('[RoomStore] 设置卧底词语:', this.spyWord);
+      } else if (this.currentRole === 'god') {
+        // 上帝知道所有词语
+        this.civilianWord = roleData.civilian_word || '';
+        this.spyWord = roleData.spy_word || '';
+        console.log('[RoomStore] 设置上帝词语组合:', {
+          civilian: this.civilianWord,
+          spy: this.spyWord
+        });
       }
       
-      if (roleData.roles) {
-        this.roles = roleData.roles;
+      // 设置游戏状态相关信息
+      if (roleData.current_phase) {
+        this.gamePhase = roleData.current_phase;
       }
       
-      if (roleData.spy_teammates) {
-        this.spyTeammates = roleData.spy_teammates;
+      if (roleData.current_round) {
+        this.currentRound = parseInt(roleData.current_round);
+      }
+      
+      // 如果有玩家列表，更新AI玩家和用户列表
+      if (roleData.player_ids && Array.isArray(roleData.player_ids)) {
+        this.updatePlayerListWithAI(roleData.player_ids);
+      }
+      
+      // 标记游戏已开始
+      this.gameStarted = true;
+      
+      console.log('[RoomStore] 角色分配完成，当前roles对象:', this.roles);
+    },
+    
+    // 更新游戏阶段
+    updateGamePhase(phase) {
+      console.log(`[RoomStore] 更新游戏阶段: ${this.gamePhase} -> ${phase}`);
+      
+      if (!phase) {
+        console.error('[RoomStore] 尝试更新为空的游戏阶段');
+        return;
+      }
+      
+      // 保存上一个阶段
+      this.previousGamePhase = this.gamePhase;
+      
+      // 更新当前阶段
+      this.gamePhase = phase;
+      
+      // 投票阶段特殊处理
+      if (phase === 'voting') {
+        console.log('[RoomStore] 进入投票阶段，清除之前的投票记录');
+        this.clearVotes();
+      }
+      
+      // 输出更新后的状态
+      console.log('[RoomStore] 游戏阶段已更新, 当前状态:', { 
+        phase: this.gamePhase,
+        previousPhase: this.previousGamePhase,
+        gameStarted: this.gameStarted 
+      });
+    },
+    
+    // 添加更新游戏回合的方法
+    updateGameRound(round) {
+      if (round) {
+        this.currentRound = parseInt(round, 10) || 1;
+        console.log(`[RoomStore] 当前回合更新为: ${this.currentRound}`);
       }
     },
+    updatePlayerListWithAI(playerIds) {
+      console.log('[RoomStore] 更新玩家列表，确保AI玩家包含在内');
+      
+      // 获取当前用户列表中所有ID
+      const existingUserIds = new Set(this.users.map(user => user.id));
+      
+      // 检查是否有新玩家ID（包括AI玩家）需要添加
+      for (const playerId of playerIds) {
+        if (!existingUserIds.has(playerId)) {
+          // 这是一个新玩家ID，很可能是AI玩家
+          if (playerId.startsWith('llm_player_')) {
+            // 创建一个AI玩家对象
+            const aiPlayerNumber = playerId.replace('llm_player_', '');
+            const aiPlayer = {
+              id: playerId,
+              username: `AI玩家_${aiPlayerNumber}`,
+              avatar_url: '/default_room_robot_avatar.jpg',
+              is_ai: true
+            };
+            
+            // 添加到用户列表
+            this.addUser(aiPlayer);
+            console.log(`[RoomStore] 添加AI玩家到用户列表: ${aiPlayer.username}`);
+          }
+        }
+      }
+    },
+    updateVoteCount(voteCount) {
+      console.log('[RoomStore] 更新投票计数:', voteCount);
+      
+      if (!voteCount || typeof voteCount !== 'object') {
+        console.error('[RoomStore] 无效的投票计数数据:', voteCount);
+        return;
+      }
+      
+      this.voteCount = { ...voteCount };
+      console.log('[RoomStore] 更新后的投票计数:', this.voteCount);
+    },
+    recordVote(voterId, targetId) {
+      console.log(`[RoomStore] 记录投票: ${voterId} 投给 ${targetId}`);
+      
+      if (!voterId || !targetId) {
+        console.error('[RoomStore] 投票参数无效:', { voterId, targetId });
+        return;
+      }
+      
+      this.votedPlayers = { 
+        ...this.votedPlayers, 
+        [voterId]: targetId 
+      };
+      
+      console.log('[RoomStore] 更新后的投票记录:', this.votedPlayers);
+    },
+    clearVotes() {
+      console.log('[RoomStore] 清除所有投票记录');
+      this.votedPlayers = {};
+      this.voteCount = {};
+    },
+    // 添加处理玩家淘汰的方法
+    handlePlayerEliminated(playerId, playerRole) {
+      console.log(`[RoomStore] 处理玩家淘汰: ${playerId}, 角色: ${playerRole}`);
+      
+      // 确保roles对象存在
+      if (!this.roles) {
+        this.roles = {};
+      }
+      
+      // 记录被淘汰玩家的角色，确保所有人都能看到
+      this.roles[playerId] = playerRole;
+      
+      // 在用户列表中标记该玩家为已淘汰
+      const playerIndex = this.users.findIndex(user => user.id === playerId);
+      if (playerIndex !== -1) {
+        // 使用新对象更新用户，保持响应性
+        const updatedUsers = [...this.users];
+        updatedUsers[playerIndex] = {
+          ...updatedUsers[playerIndex],
+          eliminated: true,
+          role_revealed: true, // 标记角色已公开
+          role: playerRole     // 直接设置角色，便于UI显示
+        };
+        this.users = updatedUsers;
+        console.log(`[RoomStore] 已将玩家 ${playerId} 标记为淘汰，角色已揭示: ${playerRole}`);
+      }
+    },
+    // 添加设置遗言玩家ID的方法
+    setLastWordsPlayerId(playerId) {
+      console.log(`[RoomStore] 设置遗言玩家ID: ${playerId}`);
+      this.lastWordsPlayerId = playerId;
+    },
+    
+    // 设置玩家在遗言阶段是否可以发言
+    setCanSpeakInLastWords(canSpeak) {
+      console.log(`[RoomStore] 设置玩家在遗言阶段是否可以发言: ${canSpeak}`);
+      this.canSpeakInLastWords = canSpeak;
+    },
+    
+    // 清除遗言相关状态
+    clearLastWordsState() {
+      console.log('[RoomStore] 清除遗言相关状态');
+      this.lastWordsPlayerId = null;
+      this.canSpeakInLastWords = false;
+    }
   },
   getters: {
     gameNotStarted(state) {

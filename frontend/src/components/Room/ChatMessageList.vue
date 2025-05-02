@@ -13,6 +13,7 @@
         :content="msg.content"
         :is-streaming="msg.isStreaming"
         :timestamp="msg.timestamp"
+        :username="msg.username || 'AI助理'"
       />
       
       <!-- 用户消息 -->
