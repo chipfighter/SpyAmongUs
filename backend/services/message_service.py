@@ -81,7 +81,7 @@ class MessageService:
 
         # 消息类型验证
         msg_type = message_data.get("type")
-        if msg_type is not None and msg_type not in ["chat", "secret", "system"]:
+        if msg_type is not None and msg_type not in ["chat", "secret", "system", "last_words"]:
             logger.error(f"无效的消息类型: {msg_type}")
             return {
                 "valid": False,
@@ -170,10 +170,33 @@ class MessageService:
                     await self._handle_voting_phase_message(room_id, message_data, user_id)
                     return
                 elif current_phase == "last_words":
-                    # 遗言阶段消息处理 - TODO
-                    logger.info("遗言阶段消息处理功能尚未实现")
-                    # 暂时使用默认消息处理
-                    await self._handle_normal_message(room_id, message_data, user_id)
+                    # 遗言阶段消息处理
+                    logger.info(f"遗言阶段消息处理: {message_data}")
+                    
+                    # 获取当前可以发送遗言的玩家ID
+                    last_words_player = room_data.get("last_words_player")
+                    
+                    if last_words_player and last_words_player == user_id:
+                        # 如果该用户有权发送遗言，处理消息
+                        # 确保消息类型为last_words
+                        message_data["type"] = "last_words"
+                        
+                        # 调用游戏服务处理遗言
+                        if self.game_service:
+                            # 确保消息包含room_id字段
+                            message_data["room_id"] = room_id
+                            await self.game_service.handle_last_words(
+                                room_id=room_id,
+                                player_id=user_id,
+                                message=message_data
+                            )
+                        else:
+                            logger.error("无法访问game_service，无法处理遗言")
+                            # 退回到普通消息处理
+                            await self._handle_normal_message(room_id, message_data, user_id)
+                    else:
+                        logger.warning(f"用户 {user_id} 在不是其遗言轮次时尝试发言，忽略消息")
+                    
                     return
                 elif current_phase == "secret_chat":
                     # 秘密聊天阶段消息处理 - TODO

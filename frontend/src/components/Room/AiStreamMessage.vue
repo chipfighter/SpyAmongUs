@@ -3,7 +3,7 @@
   <div class="ai-stream-message">
     <!-- AI头像和名称 -->
     <div class="avatar">
-      <img src="/default_room_robot_avatar.jpg" :alt="username">
+      <img :src="avatar" :alt="username">
     </div>
     <div class="message-content">
       <div class="username">{{ username }}</div>
@@ -43,6 +43,10 @@ export default {
     username: {
       type: String,
       default: 'AI助理'
+    },
+    avatar: {
+      type: String,
+      default: '/default_room_robot_avatar.jpg'
     }
   },
   data() {
@@ -116,12 +120,18 @@ export default {
         this.lastEndChars = this.processedContent.slice(-3);
       }
     },
-    // 添加对isStreaming的监听，确保状态变化时正确更新UI
+    // 添加对isStreaming的监听，确保状态变化时立即响应，隐藏光标
     isStreaming(newValue) {
       if (!newValue) {
         console.log('AI流式消息结束，隐藏光标');
         // 强制组件重新渲染确保光标消失
         this.$forceUpdate();
+        
+        // 额外确保组件能够正确响应isStreaming变成false的情况
+        setTimeout(() => {
+          // 双重保险：再强制更新一次，解决某些情况下状态变化没有被正确响应的问题
+          this.$forceUpdate();
+        }, 10);
       }
     }
   }

@@ -33,6 +33,35 @@ export const useChatStore = defineStore('chat', {
       }
     },
     
+    // 更新AI流式消息
+    updateAiStreamMessage(sessionId, updates) {
+      // 查找消息索引
+      const messageIndex = this.messages.findIndex(msg => 
+        msg.id === sessionId && msg.type === 'ai_stream'
+      );
+      
+      if (messageIndex !== -1) {
+        // 使用原对象的所有属性加上新的更新来创建新对象
+        const updatedMessage = {
+          ...this.messages[messageIndex],
+          ...updates,
+          // 更新timestamp确保Vue检测到变化
+          _updateTimestamp: Date.now()
+        };
+        
+        // 替换原消息对象
+        this.messages.splice(messageIndex, 1, updatedMessage);
+        console.log(`[ChatStore] 更新AI流式消息 ${sessionId}, 更新内容:`, updates);
+        
+        // 确保Vue更新视图
+        nextTick(() => {
+          // 什么都不做，只为触发视图更新
+        });
+      } else {
+        console.warn(`[ChatStore] 无法找到AI流式消息 ${sessionId} 进行更新`);
+      }
+    },
+    
     // 添加收到的秘密消息 (由 websocketStore 调用)
     addSecretMessage(message) {
       console.log('[ChatStore] Adding secret message:', message);

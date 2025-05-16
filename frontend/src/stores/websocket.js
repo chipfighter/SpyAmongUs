@@ -153,16 +153,196 @@ export const useWebsocketStore = defineStore('websocket', {
 
         console.log('[WS] 收到消息:', data);
         
-        // 快速处理普通聊天消息 - 高优先级立即显示
+        // 显式处理遗言消息
+        if (data.type === 'last_words') {
+          console.log('[WS] 处理遗言消息:', data);
+          const chatStore = useChatStore();
+          const roomStore = useRoomStore();
+          
+          // 确保消息包含时间戳
+          if (!data.timestamp) {
+            data.timestamp = Date.now();
+          }
+          
+          // 识别是否为AI玩家的遗言消息
+          const isAiPlayer = data.user_id && data.user_id.startsWith('llm_player_');
+          
+          if (isAiPlayer) {
+            console.log('[WS] 检测到AI玩家遗言消息，转换为流式处理');
+            // 将AI遗言消息转换为流式消息
+            const sessionId = `ai_lastwords_${Date.now()}`;
+            
+            // 从遗言消息中提取信息
+            const aiPlayerInfo = this.getAiPlayerInfo(data.user_id);
+            
+            // 创建模拟流式消息会话
+            const sessionData = {
+              content: data.content || '',
+              updateTimer: null,
+              lastUpdateTime: Date.now(),
+              needsUpdate: true,
+              isStreaming: true,
+              timestamp: data.timestamp
+            };
+            this.activeAiSessions.set(sessionId, sessionData);
+            
+            // 添加AI流式消息
+            chatStore.addMessage({
+              id: sessionId,
+              type: 'ai_stream',
+              username: data.username || aiPlayerInfo.username,
+              user_id: data.user_id,
+              timestamp: sessionData.timestamp,
+              content: '',  // 初始为空，模拟流式加载
+              isStreaming: true,
+              avatarUrl: data.avatar_url || aiPlayerInfo.avatarUrl
+            });
+            
+            // 设置定时器模拟流式输出
+            let currentIndex = 0;
+            const content = data.content;
+            const chunkSize = Math.max(3, Math.floor(content.length / 10)); // 分成约10个片段
+            
+            sessionData.updateTimer = setInterval(() => {
+              if (currentIndex < content.length) {
+                const nextIndex = Math.min(currentIndex + chunkSize, content.length);
+                const chunk = content.substring(currentIndex, nextIndex);
+                sessionData.content += chunk;
+                currentIndex = nextIndex;
+                
+                chatStore.updateAiStreamMessage(sessionId, {
+                  content: sessionData.content,
+                  isStreaming: true
+                });
+                
+                // 如果已经完成
+                if (currentIndex >= content.length) {
+                  // 标记流式传输结束
+                  sessionData.isStreaming = false;
+                  
+                  // 最后一次更新
+                  chatStore.updateAiStreamMessage(sessionId, {
+                    content: sessionData.content,
+                    isStreaming: false
+                  });
+                  
+                  // 清除定时器
+                  clearInterval(sessionData.updateTimer);
+                  sessionData.updateTimer = null;
+                  
+                  // 移除会话
+                  setTimeout(() => {
+                    this.activeAiSessions.delete(sessionId);
+                  }, 1000);
+                }
+              }
+            }, 100); // 每100ms更新一次
+          } else {
+            // 添加高优先级标记，确保即使在AI流式响应期间也能立即显示
+            data._priority = true;
+            
+            // 确保消息显示为遗言类型
+            data.type = 'last_words';
+            
+            // 添加遗言消息到聊天
+            chatStore.addMessage(data);
+          }
+          return;
+        }
+        
+        // 快速处理普通聊天消息 - 高优先级立即显示        
         if (data.type === 'chat') {
           const chatStore = useChatStore();
           // 添加时间戳以确保消息排序正确
           if (!data.timestamp) {
             data.timestamp = Date.now();
           }
-          // 为普通消息添加高优先级标记，确保即使在AI流式响应期间也能立即显示
-          data._priority = true;
-          chatStore.addMessage(data);
+          
+          // 识别是否为AI玩家的消息（包括普通消息和遗言）
+          const isAiPlayer = data.user_id && data.user_id.startsWith('llm_player_');
+          
+          // 修改后的判断，确保不干扰遗言消息
+          if (isAiPlayer && data.type !== 'last_words') {
+            console.log('[WS] 检测到AI玩家普通消息，转换为流式处理');
+            // 将普通AI消息转换为流式消息
+            const sessionId = `ai_message_${Date.now()}`;
+            
+            // 从普通消息中提取信息
+            const aiPlayerInfo = this.getAiPlayerInfo(data.user_id);
+            
+            // 创建模拟流式消息会话
+            const sessionData = {
+              content: data.content || '',
+              updateTimer: null,
+              lastUpdateTime: Date.now(),
+              needsUpdate: true,
+              isStreaming: true,
+              timestamp: data.timestamp
+            };
+            this.activeAiSessions.set(sessionId, sessionData);
+            
+            // 添加AI流式消息
+            chatStore.addMessage({
+              id: sessionId,
+              type: 'ai_stream',
+              username: data.username || aiPlayerInfo.username,
+              user_id: data.user_id,
+              timestamp: sessionData.timestamp,
+              content: '',  // 初始为空，模拟流式加载
+              isStreaming: true,
+              avatarUrl: data.avatar_url || aiPlayerInfo.avatarUrl
+            });
+            
+            // 设置定时器模拟流式输出
+            let currentIndex = 0;
+            const content = data.content;
+            const chunkSize = Math.max(3, Math.floor(content.length / 10)); // 分成约10个片段
+            
+            sessionData.updateTimer = setInterval(() => {
+              if (currentIndex < content.length) {
+                const nextIndex = Math.min(currentIndex + chunkSize, content.length);
+                const chunk = content.substring(currentIndex, nextIndex);
+                sessionData.content += chunk;
+                currentIndex = nextIndex;
+                
+                chatStore.updateAiStreamMessage(sessionId, {
+                  content: sessionData.content,
+                  isStreaming: true
+                });
+                
+                // 如果已经完成
+                if (currentIndex >= content.length) {
+                  // 标记流式传输结束
+                  sessionData.isStreaming = false;
+                  
+                  // 最后一次更新
+                  chatStore.updateAiStreamMessage(sessionId, {
+                    content: sessionData.content,
+                    isStreaming: false
+                  });
+                  
+                  // 清除定时器
+                  clearInterval(sessionData.updateTimer);
+                  sessionData.updateTimer = null;
+                  
+                  // 移除会话
+                  setTimeout(() => {
+                    this.activeAiSessions.delete(sessionId);
+                  }, 1000);
+                }
+              }
+            }, 100); // 每100ms更新一次
+          } else {
+            // 为普通消息添加高优先级标记，确保即使在AI流式响应期间也能立即显示
+            data._priority = true;
+            
+            // 添加调试日志，特别是对于last_words类型
+            if (data.type === 'last_words') {
+              console.log('[WS] 接收到遗言消息，直接显示:', data);
+            }
+            
+            chatStore.addMessage(data);
+          }
         } 
         // 异步处理AI流式消息和其他消息
         else {
@@ -223,99 +403,107 @@ export const useWebsocketStore = defineStore('websocket', {
             const aiNumber = data.user_id.replace('llm_player_', '');
             username = `AI玩家_${aiNumber}`;
             
-            // 从房间store获取更多信息
+            // 从房间store获取更多信息 - 首先查找用户列表
             const aiPlayer = roomStore.users.find(u => u.id === data.user_id);
             if (aiPlayer) {
               username = aiPlayer.username || username;
               avatarUrl = aiPlayer.avatar_url || avatarUrl;
+              console.log(`[WS] 从users列表找到AI玩家 ${data.user_id} 的头像: ${avatarUrl}`);
+            } else {
+              console.log(`[WS] 未在用户列表中找到AI玩家 ${data.user_id}`);
             }
             
-            console.log(`[WS] AI玩家消息: ${username}, ID: ${data.user_id}`);
+            // 检查Redis中分配的AI头像信息
+            if (roomStore.roomInfo && roomStore.roomInfo.invite_code) {
+              // 这里可以直接从Redis获取AI头像信息
+              // 实际上在角色分配时，backend已经发送了ai_avatars信息给前端
+              const aiAvatarFromRedisSetting = roomStore.getAiAvatarById(data.user_id);
+              if (aiAvatarFromRedisSetting) {
+                avatarUrl = aiAvatarFromRedisSetting;
+                console.log(`[WS] 从Redis设置中获取AI玩家 ${data.user_id} 的头像: ${avatarUrl}`);
+              }
+            }
+            
+            console.log(`[WS] AI玩家消息: ${username}, ID: ${data.user_id}, 最终头像: ${avatarUrl}`);
           }
           
-          // 创建新的AI消息对象
-          const aiMessage = {
-            id: sessionId, 
+          // 直接创建流式消息
+          chatStoreForAI.addMessage({
+            id: sessionId,
             type: 'ai_stream',
-            content: sessionData.content,
-            isStreaming: true,       // 明确标记为正在流式传输
-            is_start: data.is_start, // 保留原始标记
-            is_end: data.is_end,     // 保留原始标记
+            username: username,
+            user_id: data.user_id || 'ai_assistant',
             timestamp: sessionData.timestamp,
-            sessionId: sessionId,
-            username: username,       // 使用动态计算的用户名
-            avatar_url: avatarUrl,    // 使用动态头像
-            user_id: data.user_id     // 保存用户ID以便后续更新
-          };
-          
-          // 添加消息到聊天存储
-          chatStoreForAI.addMessage(aiMessage);
-          console.log('[WS] Started new AI stream message:', sessionId);
+            content: sessionData.content,
+            isStreaming: true,
+            avatarUrl: avatarUrl
+          });
         } else {
-          console.warn('[WS] Received AI stream start flag for existing session:', sessionId);
-          if (data.content) {
-            sessionData.content += data.content;
-            sessionData.needsUpdate = true;
-          }
+          // 会话已存在，但新的开始消息可能表示重置
+          sessionData.content = data.content || '';
           sessionData.isStreaming = true;
+          sessionData.needsUpdate = true;
+          sessionData.timestamp = data.timestamp || Date.now();
+          
+          // 更新现有消息
+          chatStoreForAI.updateAiStreamMessage(sessionId, {
+            content: sessionData.content,
+            isStreaming: true
+          });
         }
-      } 
-      // 如果不是开始消息，确保会话存在
+      }
+      // 如果是数据更新或结束消息
       else if (sessionData) {
-        // 添加内容
-        if (data.content) {
+        // 更新内容
+        if (data.content !== undefined) {
           sessionData.content += data.content;
           sessionData.needsUpdate = true;
         }
         
-        // 设置流式状态 - 除非是结束消息，否则一直标记为流式传输中
-        sessionData.isStreaming = !data.is_end;
+        // 如果是结束消息，标记流式传输结束
+        if (data.is_end) {
+          sessionData.isStreaming = false;
+          sessionData.needsUpdate = true;
+          
+          // 清除定时器
+          if (sessionData.updateTimer) {
+            clearInterval(sessionData.updateTimer);
+            sessionData.updateTimer = null;
+          }
+          
+          console.log(`[WS] AI stream session ended: ${sessionId}`);
+          
+          // 最后一次更新
+          chatStoreForAI.updateAiStreamMessage(sessionId, {
+            content: sessionData.content,
+            isStreaming: false
+          });
+          
+          // 移除会话
+          setTimeout(() => {
+            this.activeAiSessions.delete(sessionId);
+          }, 1000); // 稍微延迟删除，确保界面已更新
+          
+          return;
+        }
         
-        // 检查是否需要立即更新UI
-        const shouldUpdateNow = data.is_end || (Date.now() - sessionData.lastUpdateTime > 100);
-        
-        if (shouldUpdateNow && sessionData.needsUpdate) {
-          this.updateAiMessage(sessionId, sessionData);
-          sessionData.lastUpdateTime = Date.now();
-          sessionData.needsUpdate = false;
-        } 
-        // 如果不需要立即更新且没有计时器，创建一个
-        else if (sessionData.needsUpdate && !sessionData.updateTimer) {
-          sessionData.updateTimer = setTimeout(() => {
+        // 定时更新界面（如果没有定时器）
+        if (!sessionData.updateTimer) {
+          sessionData.updateTimer = setInterval(() => {
+            // 只有当内容有变化时才更新
             if (sessionData.needsUpdate) {
-              this.updateAiMessage(sessionId, sessionData);
+              chatStoreForAI.updateAiStreamMessage(sessionId, {
+                content: sessionData.content,
+                isStreaming: sessionData.isStreaming
+              });
+              
               sessionData.lastUpdateTime = Date.now();
               sessionData.needsUpdate = false;
             }
-            sessionData.updateTimer = null;
-          }, 100); // 100ms节流更新
-        }
-        
-        // 如果结束，清理会话
-        if (data.is_end) {
-          if (sessionData.updateTimer) {
-            clearTimeout(sessionData.updateTimer);
-          }
-          this.activeAiSessions.delete(sessionId);
-          console.log('[WS] Ended AI stream message:', sessionId);
+          }, 100); // 每100ms更新一次，确保流畅
         }
       } else {
-        console.error('[WS] Received AI stream chunk for non-existent session:', sessionId, data);
-      }
-    },
-    
-    // 更新AI消息内容
-    updateAiMessage(sessionId, sessionData) {
-      const chatStore = useChatStore();
-      let aiMessage = chatStore.messages.find(msg => msg.sessionId === sessionId && msg.type === 'ai_stream');
-      
-      if (aiMessage) {
-        aiMessage.content = sessionData.content;
-        aiMessage.isStreaming = sessionData.isStreaming; // 更新流式状态
-        aiMessage.is_end = !sessionData.isStreaming;     // 同步更新结束标志
-        console.log(`[WS] 更新AI消息 ${sessionId}, isStreaming=${aiMessage.isStreaming}`);
-      } else {
-        console.error('[WS] Cannot find AI message to update:', sessionId);
+        console.warn(`[WS] Received stream data for unknown session: ${sessionId}`);
       }
     },
     
@@ -540,6 +728,18 @@ export const useWebsocketStore = defineStore('websocket', {
                 content: `${data.voter_name || '玩家'} 投票给了 ${data.target_name || '目标玩家'}`,
                 timestamp: data.timestamp || Date.now()
               });
+              
+              // 关键修复：更新投票计数
+              if (data.vote_count) {
+                console.log('[WS] 更新投票计数数据:', data.vote_count);
+                roomStore.updateVoteCount(data.vote_count);
+              } else {
+                console.warn('[WS] 投票事件消息中缺少vote_count数据，尝试增加目标玩家票数');
+                // 尝试手动增加票数
+                const voteCount = {...roomStore.voteCount};
+                voteCount[data.target_id] = (voteCount[data.target_id] || 0) + 1;
+                roomStore.updateVoteCount(voteCount);
+              }
             }
             break;
         case 'vote_phase_start':
@@ -603,6 +803,12 @@ export const useWebsocketStore = defineStore('websocket', {
                     document.dispatchEvent(new CustomEvent('current-player-eliminated', {
                         detail: { playerId: data.player_id, role: data.role }
                     }));
+                }
+                
+                // 如果接收到玩家被淘汰消息，应立即更新游戏阶段为last_words（因为后端已进入此阶段）
+                if (roomStore.gamePhase === 'voting') {
+                    console.log('[WS] 收到玩家淘汰消息，更新游戏阶段为last_words');
+                    roomStore.updateGamePhase('last_words');
                 }
             }
             
@@ -772,8 +978,8 @@ export const useWebsocketStore = defineStore('websocket', {
             }
             
             // 派发事件通知组件处理UI更新
-            document.dispatchEvent(new CustomEvent('last-words-phase-start', { 
-                detail: data
+            document.dispatchEvent(new CustomEvent('last-words-phase-start', {
+                 detail: data
             }));
             
             break;
@@ -999,6 +1205,49 @@ export const useWebsocketStore = defineStore('websocket', {
         content: `倒计时已取消: ${reason}`,
         timestamp: Date.now()
       });
+    },
+    // 辅助方法：检查当前是否处于遗言阶段
+    isLastWordsPhase() {
+      const roomStore = useRoomStore();
+      return roomStore.gamePhase === 'last_words';
+    },
+    
+    // 辅助方法：获取AI玩家信息
+    getAiPlayerInfo(userId) {
+      const roomStore = useRoomStore();
+      
+      // 默认信息
+      const defaultInfo = {
+        username: 'AI玩家',
+        avatarUrl: '/default_room_robot_avatar.jpg'
+      };
+      
+      if (!userId || !userId.startsWith('llm_player_')) {
+        return defaultInfo;
+      }
+      
+      // 从userId中提取编号
+      const aiNumber = userId.replace('llm_player_', '');
+      defaultInfo.username = `AI玩家_${aiNumber}`;
+      
+      // 从roomStore中查找AI玩家
+      const aiPlayer = roomStore.users.find(u => u.id === userId);
+      if (aiPlayer) {
+        return {
+          username: aiPlayer.username || defaultInfo.username,
+          avatarUrl: aiPlayer.avatar_url || defaultInfo.avatarUrl
+        };
+      }
+      
+      // 检查Redis中分配的AI头像信息
+      if (roomStore.roomInfo && roomStore.roomInfo.invite_code) {
+        const aiAvatarFromRedisSetting = roomStore.getAiAvatarById(userId);
+        if (aiAvatarFromRedisSetting) {
+          defaultInfo.avatarUrl = aiAvatarFromRedisSetting;
+        }
+      }
+      
+      return defaultInfo;
     }
   },
 }) 

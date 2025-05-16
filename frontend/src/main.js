@@ -58,7 +58,8 @@ const PUBLIC_APIS = [
   '/api/token/refresh', 
   '/api/refresh-token',
   '/api/token/rotate',
-  '/'
+  '/',
+  '/api/feedback/submit'
 ]
 
 // 需要特殊处理的API（不应用全局处理逻辑）

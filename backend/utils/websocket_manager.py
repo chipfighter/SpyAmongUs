@@ -160,8 +160,13 @@ class WebSocketManager:
         # 确定目标用户
         if is_special:
             # 广播给指定用户集合
-            targets = [user_id for user_id in target_users
-                       if user_id in self.room_connections[invite_code]]
+            # 确保target_users不为None且不为空
+            if target_users:
+                targets = [user_id for user_id in target_users
+                           if user_id in self.room_connections[invite_code]]
+            else:
+                logger.warning(f"试图发送特殊消息到房间 {invite_code}，但target_users为空或None")
+                targets = []
         else:
             # 广播给所有用户
             targets = self.room_connections[invite_code].keys()

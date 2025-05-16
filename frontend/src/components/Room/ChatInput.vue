@@ -14,7 +14,7 @@
       ></textarea>
       
       <!-- 字符计数显示 -->
-      <div class="char-counter" :class="{ 'warning': isNearLimit, 'error': isOverLimit }">
+      <div class="char-counter" :class="{ 'warning': isNearLimit, 'error': isOverLimit }" v-if="gameStarted">
         {{ modelValue.length }}/70
       </div>
       
@@ -59,7 +59,7 @@
 </template>
 
 <script setup>
-import { ref, defineProps, defineEmits, computed, nextTick } from 'vue';
+import { ref, computed, nextTick } from 'vue';
 
 const props = defineProps({
   modelValue: { // for v-model
@@ -118,10 +118,7 @@ const getPlaceholderText = computed(() => {
   return "输入消息...";
 });
 
-const emit = defineEmits([
-    'update:modelValue', // for v-model
-    'send-message'
-]);
+const emit = defineEmits(['update:modelValue', 'send-message']);
 
 const messageInputRef = ref(null);
 
@@ -145,8 +142,8 @@ const showAiAssistant = ref(true); // 控制AI助手是否显示
 const handleInput = (event) => {
   const text = event.target.value;
   
-  // 限制输入字符不超过70
-  if (text.length > 70) {
+  // 只在游戏中限制字符数
+  if (props.gameStarted && text.length > 70) {
     // 截断文本到70个字符
     emit('update:modelValue', text.substring(0, 70));
   } else {
@@ -251,7 +248,7 @@ const handleEnterKey = (event) => {
 };
 
 const emitSendMessage = () => {
-  if (props.modelValue.trim() && props.isConnected && props.modelValue.length <= 70) {
+  if (props.modelValue.trim() && props.isConnected && (!props.gameStarted || props.modelValue.length <= 70)) {
     if (props.gameStarted && props.canSpeak) {
       // 游戏中发言后立即禁言，不等待服务器响应
       console.log('[ChatInput] 游戏中发言，立即禁言');

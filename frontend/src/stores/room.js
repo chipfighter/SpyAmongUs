@@ -34,7 +34,9 @@ const getDefaultState = () => ({
   // 添加遗言相关状态
   lastWordsPlayerId: null,
   canSpeakInLastWords: false,
-  previousGamePhase: null
+  previousGamePhase: null,
+  // AI头像映射
+  aiAvatarMapping: {}
 })
 
 export const useRoomStore = defineStore('room', {
@@ -383,11 +385,36 @@ export const useRoomStore = defineStore('room', {
     // --- State Management ---
     clearRoomState() {
       console.log('[RoomStore] 清理房间状态');
+      
+      // 保存现有用户列表和房间基本信息
+      const preserveUsers = [...this.users];
+      const preserveRoomInfo = { ...this.roomInfo };
+      const preserveReadyUsers = [...this.readyUsers];
+      
+      // 获取默认状态
       const newState = getDefaultState();
+      
+      // 重置除了用户和房间基本信息外的所有状态
       for (const key in newState) {
-        this[key] = newState[key];
+        if (key !== 'users' && key !== 'roomInfo' && key !== 'readyUsers') {
+          this[key] = newState[key];
+        }
       }
-      console.log('[RoomStore] 房间状态已重置');
+      
+      // 恢复用户列表和房间基本信息
+      this.users = preserveUsers;
+      this.roomInfo = preserveRoomInfo;
+      this.readyUsers = preserveReadyUsers;
+      
+      // 确保所有用户的状态正常（清除淘汰状态、角色信息等）
+      this.users = this.users.map(user => ({
+        ...user,
+        eliminated: false,
+        role_revealed: false,
+        role: undefined
+      }));
+      
+      console.log('[RoomStore] 房间状态已重置，保留用户列表和房间信息');
     },
     
     // 处理上帝角色询问
@@ -502,6 +529,11 @@ export const useRoomStore = defineStore('room', {
         this.updatePlayerListWithAI(roleData.player_ids);
       }
       
+      // 如果有AI头像信息，更新AI玩家头像
+      if (roleData.ai_avatars && typeof roleData.ai_avatars === 'object') {
+        this.updateAiAvatars(roleData.ai_avatars);
+      }
+      
       // 标记游戏已开始
       this.gameStarted = true;
       
@@ -572,15 +604,22 @@ export const useRoomStore = defineStore('room', {
       }
     },
     updateVoteCount(voteCount) {
-      console.log('[RoomStore] 更新投票计数:', voteCount);
+      console.log('[RoomStore] 收到投票计数原始数据:', voteCount);
       
       if (!voteCount || typeof voteCount !== 'object') {
         console.error('[RoomStore] 无效的投票计数数据:', voteCount);
         return;
       }
       
-      this.voteCount = { ...voteCount };
-      console.log('[RoomStore] 更新后的投票计数:', this.voteCount);
+      // 将字符串格式的数字转换为数值
+      const convertedVoteCount = {};
+      for (const [userId, count] of Object.entries(voteCount)) {
+        // 转换为数字类型
+        convertedVoteCount[userId] = parseInt(count, 10) || 0;
+      }
+      
+      this.voteCount = convertedVoteCount;
+      console.log('[RoomStore] 处理后的投票计数:', this.voteCount);
     },
     recordVote(voterId, targetId) {
       console.log(`[RoomStore] 记录投票: ${voterId} 投给 ${targetId}`);
@@ -646,7 +685,124 @@ export const useRoomStore = defineStore('room', {
       console.log('[RoomStore] 清除遗言相关状态');
       this.lastWordsPlayerId = null;
       this.canSpeakInLastWords = false;
-    }
+    },
+    
+    // 添加更新AI玩家头像的方法
+    updateAiAvatars(aiAvatars) {
+      console.log('[RoomStore] 更新AI玩家头像:', aiAvatars);
+      
+      if (!aiAvatars || typeof aiAvatars !== 'object') {
+        console.warn('[RoomStore] 收到的AI头像数据无效');
+        return;
+      }
+      
+      // 缓存AI玩家ID与头像URL的映射
+      this.aiAvatarMapping = this.aiAvatarMapping || {};
+      
+      // 遍历所有AI玩家，更新头像
+      for (const [aiPlayerId, avatarUrl] of Object.entries(aiAvatars)) {
+        // 更新映射
+        this.aiAvatarMapping[aiPlayerId] = avatarUrl;
+        
+        const index = this.users.findIndex(user => user.id === aiPlayerId);
+        if (index !== -1) {
+          console.log(`[RoomStore] 更新AI玩家 ${aiPlayerId} 的头像为 ${avatarUrl}`);
+          // 创建新对象更新头像，保持响应性
+          this.users = [
+            ...this.users.slice(0, index),
+            { ...this.users[index], avatar_url: avatarUrl },
+            ...this.users.slice(index + 1)
+          ];
+        } else {
+          console.warn(`[RoomStore] 无法找到AI玩家 ${aiPlayerId} 来更新头像`);
+        }
+      }
+      
+      // 获取ChatStore实例，更新已有的AI消息头像
+      try {
+        const chatStore = useChatStore();
+        if (chatStore && chatStore.messages) {
+          console.log('[RoomStore] 尝试更新现有AI消息的头像');
+          const aiStreamMessages = chatStore.messages.filter(
+            msg => msg.type === 'ai_stream' && msg.user_id && msg.user_id.startsWith('llm_player_')
+          );
+          
+          if (aiStreamMessages.length > 0) {
+            console.log(`[RoomStore] 找到 ${aiStreamMessages.length} 条AI流式消息需要更新头像`);
+            
+            // 遍历所有AI流式消息，使用新头像更新
+            for (const msg of aiStreamMessages) {
+              const aiId = msg.user_id;
+              const newAvatar = this.aiAvatarMapping[aiId];
+              
+              if (newAvatar && msg.avatarUrl !== newAvatar) {
+                console.log(`[RoomStore] 更新消息 ${msg.id} 的AI头像，AI ID: ${aiId}`);
+                chatStore.updateAiStreamMessage(msg.id, { avatarUrl: newAvatar });
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[RoomStore] 更新AI消息头像时出错:', error);
+      }
+    },
+    // 从房间的存储中获取AI玩家的头像
+    getAiAvatarById(aiPlayerId) {
+      console.log('[RoomStore] 尝试获取AI玩家头像:', aiPlayerId);
+      
+      if (!aiPlayerId || !aiPlayerId.startsWith('llm_player_')) {
+        console.warn(`[RoomStore] 参数不是有效的AI玩家ID: ${aiPlayerId}`);
+        return null;
+      }
+      
+      // 先从用户列表中找
+      const userFromList = this.users.find(user => user.id === aiPlayerId);
+      if (userFromList && userFromList.avatar_url && userFromList.avatar_url !== '/default_room_robot_avatar.jpg') {
+        console.log(`[RoomStore] 从用户列表找到AI玩家 ${aiPlayerId} 头像: ${userFromList.avatar_url}`);
+        return userFromList.avatar_url;
+      }
+      
+      return null;
+    },
+    // 添加重置游戏状态的方法
+    resetGameState() {
+      console.log('[RoomStore] 重置游戏状态为初始状态');
+      
+      // 重置游戏相关状态
+      this.gameStarted = false;
+      this.roles = null;
+      this.currentRole = '';
+      this.spyTeammates = [];
+      this.gamePhase = '';
+      this.currentRound = 0;
+      this.civilianWord = '';
+      this.spyWord = '';
+      this.voteCount = {};
+      this.votedPlayers = {};
+      this.lastWordsPlayerId = null;
+      this.canSpeakInLastWords = false;
+      this.previousGamePhase = null;
+      
+      // 清除所有玩家的淘汰状态和角色信息
+      if (this.users && this.users.length > 0) {
+        // 过滤掉AI玩家，只保留真实玩家
+        this.users = this.users
+          .filter(user => !user.id.startsWith('llm_player_'))
+          .map(user => ({
+            ...user,
+            eliminated: false,
+            role_revealed: false,
+            role: undefined
+          }));
+      }
+      
+      // 如果房间信息存在，更新状态
+      if (this.roomInfo) {
+        this.roomInfo.status = 'waiting';
+      }
+      
+      console.log('[RoomStore] 游戏状态已重置为初始状态');
+    },
   },
   getters: {
     gameNotStarted(state) {

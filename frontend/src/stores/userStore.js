@@ -224,19 +224,48 @@ export const useUserStore = defineStore('user', {
     },
     
     clearUserData() {
+      // 重置状态
       this.user = null
       this.accessToken = null
       this.refreshToken = null
       this.lastActivityTime = null
+      
+      // 清理localStorage中的所有用户相关数据
       localStorage.removeItem('accessToken')
       localStorage.removeItem('refreshToken')
       localStorage.removeItem('userData')
       localStorage.removeItem('lastActivityTime')
-      // 同时清除与路由守卫相关的token
       localStorage.removeItem('token')
       localStorage.removeItem('userInfo')
+      
+      // 清理聊天和房间相关缓存
+      localStorage.removeItem('currentRoom')
+      localStorage.removeItem('roomData')
+      localStorage.removeItem('chatMessages')
+      localStorage.removeItem('roomHistory')
+      localStorage.removeItem('gameState')
+      localStorage.removeItem('playerRoles')
+      localStorage.removeItem('active_room')
+      localStorage.removeItem('tempRoomData')
+      localStorage.removeItem('lastGameResult')
+      
+      // 查找并清理所有以room_或chat_开头的缓存项
+      Object.keys(localStorage).forEach(key => {
+        if (key.startsWith('room_') || 
+            key.startsWith('chat_') || 
+            key.startsWith('game_') || 
+            key.startsWith('player_')) {
+          localStorage.removeItem(key)
+        }
+      })
+      
+      // 清理sessionStorage
+      sessionStorage.clear()
+      
       // 停止token刷新定时器
       this.stopTokenRefreshTimer()
+      
+      console.log('所有用户数据和缓存已清理')
     },
     
     async checkUserStatus() {

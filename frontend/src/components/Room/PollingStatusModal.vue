@@ -9,7 +9,7 @@
 </template>
 
 <script setup>
-import { defineProps, defineEmits } from 'vue';
+// No import needed
 
 const props = defineProps({
   isOpen: {

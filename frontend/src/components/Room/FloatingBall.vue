@@ -14,7 +14,7 @@
 </template>
 
 <script setup>
-import { defineProps, defineEmits, ref } from 'vue';
+import { ref } from 'vue';
 
 defineProps({
   show: {
@@ -71,10 +71,7 @@ const handleClick = (event) => {
     if (!isDraggingCheck.value) {
         emit('clicked', event);
     }
-    // Reset flag after click check is done
-    isDraggingCheck.value = false; 
 };
-
 </script>
 
 <style scoped>

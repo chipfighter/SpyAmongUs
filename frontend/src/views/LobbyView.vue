@@ -50,7 +50,19 @@
       <div class="menu-item disabled">
         <span class="menu-icon">⚙️</span> 设置
       </div>
+      <div class="menu-item" @click="openFeedbackModal">
+        <span class="menu-icon">📢</span> 反馈
+      </div>
     </div>
+    
+    <!-- 反馈弹窗 -->
+    <FeedbackModal
+      :show="showFeedbackModal"
+      :userId="userStore.user?.id"
+      :username="userStore.user?.username"
+      @close="showFeedbackModal = false"
+      @submit-success="handleFeedbackSuccess"
+    />
     
     <!-- 大厅内容区 -->
     <main class="lobby-content">
@@ -255,6 +267,7 @@ import { onMounted, ref, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from '../stores/userStore'
 import { useWebsocketStore } from '../stores/websocket'
+import FeedbackModal from '@/components/FeedbackModal.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -336,6 +349,9 @@ if (typeof window._refreshStates === 'undefined') {
 const showUserMenu = ref(false)
 const menuPosition = ref({ top: 0, left: 0 })
 
+// 反馈模态框相关
+const showFeedbackModal = ref(false)
+
 const toggleUserMenu = (event) => {
   event.stopPropagation() // 阻止事件冒泡
   
@@ -355,6 +371,22 @@ const toggleUserMenu = (event) => {
 const goToProfile = () => {
   router.push('/profile')
   showUserMenu.value = false
+}
+
+// 打开反馈弹窗
+const openFeedbackModal = () => {
+  showFeedbackModal.value = true
+  showUserMenu.value = false
+}
+
+// 处理反馈提交成功
+const handleFeedbackSuccess = () => {
+  // 显示成功提示
+  window.toast && window.toast({
+    message: '反馈提交成功，感谢您的反馈！',
+    type: 'success',
+    duration: 3000
+  })
 }
 
 // 点击任何地方关闭菜单

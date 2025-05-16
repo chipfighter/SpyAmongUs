@@ -34,7 +34,7 @@
 </template>
 
 <script setup>
-import { defineProps, defineEmits, ref, watch, nextTick, computed } from 'vue';
+import { ref, watch, nextTick, computed } from 'vue';
 
 const props = defineProps({
   show: {
@@ -64,16 +64,16 @@ const props = defineProps({
   }
 });
 
+const miniMessagesContainerRef = ref(null);
+const miniInputRef = ref(null);
+
+const newMessageTrimmed = computed(() => props.newMessage.trim());
+
 const emit = defineEmits([
   'close',
   'update:newMessage',
   'send-message'
 ]);
-
-const miniMessagesContainerRef = ref(null);
-const miniInputRef = ref(null);
-
-const newMessageTrimmed = computed(() => props.newMessage.trim());
 
 const emitClose = () => {
   emit('close');

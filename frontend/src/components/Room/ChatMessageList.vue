@@ -14,18 +14,21 @@
         :is-streaming="msg.isStreaming"
         :timestamp="msg.timestamp"
         :username="msg.username || 'AI助理'"
+        :avatar="msg.avatarUrl || '/default_room_robot_avatar.jpg'"
       />
       
       <!-- 用户消息 -->
-      <div v-else :class="['user-message', msg.user_id === currentUserId ? 'self-message' : '']">
+      <div v-else :class="['user-message', msg.user_id === currentUserId ? 'self-message' : '', msg.type === 'last_words' ? 'last-words-message' : '']">
         <!-- 其他用户消息 (左侧) -->
         <template v-if="msg.user_id !== currentUserId">
-          <div class="avatar">
+          <!-- 调试代码：添加检查消息类型的小标记 -->
+          <span class="debug-type" v-if="false">{{msg.type}}</span>
+          <div class="avatar" :class="{'eliminated-avatar': msg.type === 'last_words'}">
             <!-- 注意：getUserAvatar 需要父组件通过 prop 传入 user list 或直接传入 avatar url -->
             <img :src="getUserAvatarById(msg.user_id)" alt="用户头像" @error="onAvatarError">
           </div>
-          <div class="message-content">
-            <div class="username">{{ msg.username }}</div>
+          <div class="message-content" :class="{'last-words-content': msg.type === 'last_words'}">
+            <div class="username">{{ msg.username }} <span v-if="msg.type === 'last_words'" class="last-words-badge">遗言</span></div>
             <div class="text" v-if="msg.parsedContent" v-html="msg.parsedContent"></div>
             <div class="text" v-else>{{ msg.content }}</div>
             <div class="message-time">{{ formatTimestamp(msg.timestamp) }}</div>
@@ -34,13 +37,13 @@
         
         <!-- 自己的消息 (右侧) -->
         <template v-else>
-          <div class="message-content self">
-            <div class="username">{{ msg.username }}</div>
+          <div class="message-content self" :class="{'last-words-content': msg.type === 'last_words'}">
+            <div class="username">{{ msg.username }} <span v-if="msg.type === 'last_words'" class="last-words-badge">遗言</span></div>
             <div class="text" v-if="msg.parsedContent" v-html="msg.parsedContent"></div>
             <div class="text" v-else>{{ msg.content }}</div>
             <div class="message-time">{{ formatTimestamp(msg.timestamp) }}</div>
           </div>
-          <div class="avatar">
+          <div class="avatar" :class="{'eliminated-avatar': msg.type === 'last_words'}">
              <!-- 需要当前用户的头像 -->
             <img :src="currentUserAvatar || '/default_avatar.jpg'" alt="我的头像" @error="onAvatarError">
           </div>
@@ -122,6 +125,22 @@ watch(() => props.messages, (newMessages, oldMessages) => {
   if (newMessages.length !== oldMessages.length) {
       scrollToBottom();
   }
+  
+  // 监听消息的isStreaming状态变化，特别是个别AI消息结束
+  const newStoppedAiMessages = newMessages.filter(
+    (msg, index) => 
+      msg.type === 'ai_stream' && 
+      !msg.isStreaming && 
+      (index >= oldMessages.length || (oldMessages[index]?.isStreaming))
+  );
+  
+  // 如果有AI消息结束并生成，强制执行一次更新
+  if (newStoppedAiMessages.length > 0) {
+    console.log('检测到AI消息结束并生成，强制执行一次更新');
+    nextTick(() => {
+      // 在下一行解决AI消息结束时的问题
+    });
+  }
 }, { deep: true });
 
 // 组件挂载后也滚动一次
@@ -136,6 +155,23 @@ const scrollToBottom = () => {
     }
   });
 };
+
+// 处理消息类型，确保遗言正确显示
+watch(() => props.messages, (newMessages) => {
+  // 处理每条消息，确保遗言类型被正确识别
+  newMessages.forEach(msg => {
+    if (msg.type === 'last_words' && !msg._processedForUI) {
+      // 标记已处理，避免重复处理
+      msg._processedForUI = true;
+      console.log('处理遗言消息:', msg);
+      
+      // 添加额外的日志，帮助调试AI玩家遗言
+      if (msg.user_id && msg.user_id.startsWith('llm_player_')) {
+        console.log('检测到AI玩家遗言:', msg.user_id, msg.content);
+      }
+    }
+  });
+}, { deep: true, immediate: true });
 
 </script>
 
@@ -239,4 +275,62 @@ const scrollToBottom = () => {
 .user-mention { ... }
 .ai-mention { ... } 
 */
+
+/* 添加遗言相关样式 */
+.last-words-message {
+  /* 为遗言消息添加轻微的不同背景色 */
+  background-color: rgba(245, 245, 245, 0.5);
+  border-radius: 8px;
+  padding: 5px;
+  position: relative;
+}
+
+.last-words-message:before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background-color: rgba(204, 204, 204, 0.5);
+}
+
+.last-words-content {
+  /* 为遗言内容添加特殊样式 */
+  border-left: 3px solid #cccccc;
+  padding-left: 8px;
+}
+
+.eliminated-avatar {
+  position: relative;
+}
+
+.eliminated-avatar:after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  border-radius: 50%;
+  z-index: 1;
+}
+
+.eliminated-avatar img {
+  /* 淘汰玩家的头像变灰 */
+  filter: grayscale(100%);
+  border: 2px solid #ff4d4f;
+}
+
+.last-words-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  color: white;
+  background-color: #cccccc;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 5px;
+  vertical-align: middle;
+}
 </style> 

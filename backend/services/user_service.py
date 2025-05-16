@@ -319,15 +319,15 @@ class UserService:
         """更新用户头像，需要同时更新MongoDB和Redis"""
         try:
             # 更新MongoDB
-            success_mongo = await self.mongo_client.update_user(user_id, {"avatar_url": avatar_url})
+            success_mongo, message = await self.mongo_client.update_avatar(user_id, avatar_url)
             if not success_mongo:
                 return {
                     "success": False,
-                    "message": "更新数据库失败"
+                    "message": message
                 }
             
             # 更新Redis缓存
-            success_redis = await self.redis_client.update_user_cache_field(user_id, "avatar_url", avatar_url)
+            success_redis = await self.redis_client.update_avatar(user_id, avatar_url)
             if not success_redis:
                 logger.warning(f"更新用户 {user_id} 的头像Redis缓存失败，但不影响主要流程")
             

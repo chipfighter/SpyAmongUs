@@ -46,7 +46,11 @@
               }"
             >
               <div class="player-avatar">
-                <img :src="getPlayerAvatar(player)" alt="玩家头像">
+                <img 
+                  :src="getPlayerAvatar(player)" 
+                  alt="玩家头像"
+                  @error="handleAvatarError($event, player)"
+                >
               </div>
               <div class="player-info">
                 <div class="player-name">{{ player.name }}</div>
@@ -67,6 +71,7 @@
 
 <script setup>
 import { computed } from 'vue';
+import { useRoomStore } from '../../stores/room';
 
 // 定义组件属性
 const props = defineProps({
@@ -149,10 +154,43 @@ const getRoleDisplay = (role) => {
 
 // 获取玩家头像
 const getPlayerAvatar = (player) => {
-  if (player.id.startsWith('llm_player_')) {
-    return '/default_room_robot_avatar.jpg'; // 默认AI头像
+  if (!player) return '/default_avatar.jpg';
+  
+  // 检查player.avatar是否有效 
+  if (player.avatar && player.avatar !== '/default_avatar.jpg') {
+    return player.avatar;
+  }
+  
+  // 根据玩家类型返回默认头像
+  if (player.id && player.id.startsWith('llm_player_')) {
+    // 从房间store中获取AI头像
+    const roomStore = useRoomStore();
+    const aiAvatar = roomStore.aiAvatarMapping[player.id];
+    if (aiAvatar) {
+      console.log(`[GameResult] 从aiAvatarMapping获取到AI玩家 ${player.id} 的头像: ${aiAvatar}`);
+      return aiAvatar;
+    }
+    return '/default_room_robot_avatar.jpg'; // AI玩家默认头像
+  }
+  
+  return '/default_avatar.jpg'; // 普通玩家默认头像
+};
+
+// 处理头像加载错误
+const handleAvatarError = (event, player) => {
+  // 如果图片加载失败，使用备用头像
+  if (player && player.id && player.id.startsWith('llm_player_')) {
+    // 从房间store中获取AI头像
+    const roomStore = useRoomStore();
+    const aiAvatar = roomStore.aiAvatarMapping[player.id];
+    if (aiAvatar) {
+      console.log(`[GameResult] 头像加载失败，使用aiAvatarMapping中的AI头像: ${aiAvatar}`);
+      event.target.src = aiAvatar;
+    } else {
+      event.target.src = '/default_room_robot_avatar.jpg'; // AI玩家默认头像
+    }
   } else {
-    return player.avatar || '/default_avatar.jpg';
+    event.target.src = '/default_avatar.jpg'; // 普通玩家默认头像
   }
 };
 </script>
@@ -168,7 +206,7 @@ const getPlayerAvatar = (player) => {
   display: flex;
   justify-content: center;
   align-items: center;
-  z-index: 1000;
+  z-index: 2000;
   backdrop-filter: blur(4px);
 }
 

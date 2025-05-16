@@ -81,7 +81,7 @@
 </template>
 
 <script setup>
-import { defineProps, defineEmits, computed } from 'vue';
+import { computed } from 'vue';
 import { useRoomStore } from '../../stores/room';
 
 const roomStore = useRoomStore();
@@ -124,13 +124,6 @@ const props = defineProps({
   }
 });
 
-defineEmits([
-  'copy-invite-code',
-  'back-to-lobby',
-  'leave-room', 
-  'disband-room'
-]);
-
 // 根据游戏阶段返回对应的文本
 const gamePhaseText = computed(() => {
   switch(props.gamePhase) {
@@ -162,7 +155,6 @@ const gamePhaseClass = computed(() => {
       return '';
   }
 });
-
 </script>
 
 <style scoped>

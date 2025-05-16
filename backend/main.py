@@ -34,13 +34,14 @@ from llm.llm_pipeline import llm_pipeline
 from services.room_service import RoomService
 from services.user_service import UserService
 from services.auth_service import AuthService
+from services.feedback_service import FeedbackService
 from utils.redis_utils import RedisClient
 from utils.mongo_utils import MongoClient
 from utils.logger_utils import setup_logger, get_logger
 from config import (
     APP_HOST, APP_PORT, DEBUG,
     USER_STATUS_ONLINE, MIN_PLAYERS, MIN_SPY_COUNT, MAX_ROUNDS, MAX_SPEAK_TIME, MAX_LAST_WORDS_TIME,
-    USER_STATUS_IN_ROOM, ROOM_KEY_PREFIX
+    USER_STATUS_IN_ROOM, ROOM_KEY_PREFIX, GAME_STATUS_PLAYING, ROOM_ALIVE_PLAYERS_KEY_PREFIX
 )
 from utils.websocket_manager import WebSocketManager
 from services.message_service import MessageService
@@ -93,6 +94,7 @@ websocket_manager = WebSocketManager()
 message_service = MessageService(redis_client, websocket_manager, llm_pipeline)
 room_service = RoomService(user_service, redis_client, websocket_manager)
 auth_service = AuthService()
+feedback_service = FeedbackService(mongo_client)
 
 # 设置服务之间的依赖关系
 room_service.set_message_service(message_service)
@@ -626,6 +628,29 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 except:
                     # 如果无法发送，可能连接已断开
                     break
+                
+                # 检查是否是游戏进行时
+                try:
+                    # 获取房间当前状态
+                    room_key = f"{ROOM_KEY_PREFIX}{room_id}"
+                    room_status = await redis_client.hget(room_key, "status")
+                    current_phase = await redis_client.hget(room_key, "current_phase")
+                    
+                    # 如果游戏正在进行中且处于发言阶段，尝试恢复游戏流程
+                    if room_status == GAME_STATUS_PLAYING and current_phase == "speaking":
+                        logger.warning(f"游戏正在进行中，尝试恢复发言流程: 房间={room_id}, 阶段={current_phase}")
+                        # 获取当前发言者
+                        alive_players_key = ROOM_ALIVE_PLAYERS_KEY_PREFIX % room_id
+                        try:
+                            current_speaker = await redis_client.zrange(alive_players_key, 0, 0)
+                            if current_speaker and len(current_speaker) > 0 and current_speaker[0].startswith("llm_player_"):
+                                logger.info(f"当前发言者是AI玩家 {current_speaker[0]}，尝试移动到下一个发言者")
+                                # 使用room_service的game_service移动到下一个发言者
+                                await room_service.game_service.move_to_next_speaker(room_id)
+                        except Exception as recovery_error:
+                            logger.error(f"尝试恢复游戏流程失败: {str(recovery_error)}")
+                except Exception as check_error:
+                    logger.error(f"检查游戏状态失败: {str(check_error)}")
 
     except WebSocketDisconnect:
         # 6.用户断开连接（缓存清理逻辑放至room_service）
@@ -1156,6 +1181,106 @@ async def update_avatar(user_id: str, avatar_data: Dict[str, str], request: Requ
         logger.error(f"更新用户头像发生错误: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# 反馈相关API
+@app.post("/api/feedback/submit")
+async def submit_feedback(feedback_data: Dict[str, Any], request: Request):
+    """提交用户反馈API"""
+    try:
+        # 获取用户ID (如果授权了)
+        user_id = getattr(request.state, 'user_id', None)
+        username = getattr(request.state, 'username', '匿名用户')
+        
+        # 处理反馈数据
+        # 如果前端传来user_id不是anonymous但请求没有授权，将其设为匿名
+        if feedback_data.get("user_id") and feedback_data["user_id"] != "anonymous" and not user_id:
+            logger.warning("未授权用户尝试使用非匿名ID提交反馈，已转为匿名提交")
+            feedback_data["user_id"] = "anonymous"
+        
+        # 如果前端提交的user_id与授权用户不匹配，使用授权用户的ID
+        if user_id and feedback_data.get("user_id") and feedback_data["user_id"] != "anonymous" and feedback_data["user_id"] != user_id:
+            logger.info(f"用户提交反馈用户ID不匹配，使用授权ID: {user_id}")
+            feedback_data["user_id"] = user_id
+            feedback_data["username"] = username
+        
+        # 如果已授权但未指定用户ID，则使用授权用户ID
+        if user_id and (not feedback_data.get("user_id") or feedback_data.get("user_id") == "anonymous"):
+            feedback_data["user_id"] = user_id
+            feedback_data["username"] = username
+                
+        # 处理反馈提交
+        result = await feedback_service.submit_feedback(feedback_data)
+        
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+            
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"提交反馈时发生错误: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 管理员反馈获取API
+@app.get("/api/admin/feedbacks")
+async def get_all_feedbacks(
+    request: Request,
+    status: str = None,
+    type: str = None
+):
+    """管理员获取所有反馈API"""
+    try:
+        # 验证管理员权限
+        if not hasattr(request.state, 'user_id'):
+            raise HTTPException(status_code=401, detail="未授权，请重新登录")
+            
+        # TODO: 在实际环境中，应该检查用户是否有管理员权限
+        # 此处简化处理，假设所有登录用户均可访问管理员API
+        
+        # 获取反馈列表
+        result = await feedback_service.get_all_feedbacks(status=status, type=type)
+        
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+            
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取反馈列表时发生错误: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 更新反馈状态API
+@app.post("/api/admin/feedback/{feedback_id}/update-status")
+async def update_feedback_status(
+    feedback_id: str,
+    status_data: Dict[str, str],
+    request: Request
+):
+    """更新反馈状态API"""
+    try:
+        # 验证管理员权限
+        if not hasattr(request.state, 'user_id'):
+            raise HTTPException(status_code=401, detail="未授权，请重新登录")
+            
+        # TODO: 在实际环境中，应该检查用户是否有管理员权限
+        
+        # 更新反馈状态
+        new_status = status_data.get("status")
+        if not new_status:
+            raise HTTPException(status_code=400, detail="缺少状态字段")
+            
+        result = await feedback_service.update_feedback_status(feedback_id, new_status)
+        
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+            
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新反馈状态时发生错误: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
-    uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, reload=DEBUG)
+    uvicorn.run(app, host=APP_HOST, port=APP_PORT)
 

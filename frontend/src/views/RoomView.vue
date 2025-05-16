@@ -1617,6 +1617,9 @@ export default {
     // 关闭游戏结算弹窗
     closeGameResult() {
       this.showGameResult = false;
+      
+      // 使用roomStore的resetGameState方法恢复游戏开始前的状态
+      this.roomStore.resetGameState();
     },
     
     // 准备下一局游戏
@@ -1653,24 +1656,51 @@ export default {
       // 添加玩家数据
       if (gameEndData.players && Array.isArray(gameEndData.players)) {
         gameEndData.players.forEach(player => {
+          // 尝试从roomStore的users列表获取更准确的头像
+          let playerAvatar = player.avatar_url || '/default_avatar.jpg';
+          
+          // 如果是AI玩家，尝试从aiAvatarMapping获取头像
+          if (player.id.startsWith('llm_player_')) {
+            const cachedAiAvatar = this.roomStore.aiAvatarMapping[player.id];
+            if (cachedAiAvatar) {
+              playerAvatar = cachedAiAvatar;
+            }
+          } else {
+            // 如果是普通玩家，从roomStore.users中查找更准确的信息
+            const storeUser = this.roomStore.users.find(u => u.id === player.id);
+            if (storeUser && storeUser.avatar_url) {
+              playerAvatar = storeUser.avatar_url;
+            }
+          }
+          
           const playerObj = {
             id: player.id,
             name: player.username || (player.id.startsWith('llm_player_') ? 
                   `AI玩家_${player.id.replace('llm_player_', '')}` : '未知玩家'),
             role: player.role,
-            avatar: player.avatar_url || '/default_avatar.jpg'
+            avatar: playerAvatar
           };
           playersData.push(playerObj);
         });
       } else {
         // 如果后端没有提供玩家数据，则从当前玩家列表构建
         this.roomUsers.forEach(user => {
+          let playerAvatar = user.avatar_url || '/default_avatar.jpg';
+          
+          // 如果是AI玩家，尝试从aiAvatarMapping获取头像
+          if (user.id.startsWith('llm_player_')) {
+            const cachedAiAvatar = this.roomStore.aiAvatarMapping[user.id];
+            if (cachedAiAvatar) {
+              playerAvatar = cachedAiAvatar;
+            }
+          }
+          
           const playerObj = {
             id: user.id,
             name: user.username || (user.id.startsWith('llm_player_') ? 
                   `AI玩家_${user.id.replace('llm_player_', '')}` : '未知玩家'),
             role: gameEndData.roles ? gameEndData.roles[user.id] : '',
-            avatar: user.avatar_url || '/default_avatar.jpg'
+            avatar: playerAvatar
           };
           playersData.push(playerObj);
         });
@@ -1693,6 +1723,17 @@ export default {
       
       // 显示游戏结算弹窗
       this.showGameResultModal(event.detail);
+      
+      // 添加游戏结束后的状态重置延迟
+      setTimeout(() => {
+        // 使用roomStore的resetGameState方法
+        this.roomStore.resetGameState();
+        
+        // 更新当前用户的准备状态
+        this.isReady = false;
+        
+        console.log('[RoomView] 游戏结束状态重置完成');
+      }, 500);
     },
   }
 }

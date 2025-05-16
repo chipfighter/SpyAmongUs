@@ -57,6 +57,10 @@
             <span class="vote-number">{{ getVoteCount(user.id) }}</span>
             <span class="vote-text">票</span>
           </div>
+          <!-- 添加调试输出 -->
+          <div v-if="debug && roomStore.gamePhase === 'voting'" class="debug-votes">
+            [userId: {{user.id}}, votes: {{JSON.stringify(roomStore.voteCount)}}]
+          </div>
           
           <!-- 当前用户已进行投票的全局提示（仅在投票阶段显示） -->
           <div v-if="roomStore.gamePhase === 'voting' && 
@@ -99,6 +103,20 @@
             <i class="action-icon">🚫</i>
             <span class="action-text">踢出房间</span>
           </button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- AI助理分割线和头像 - 仅在游戏未开始时显示 -->
+    <div v-if="!gameStarted" class="ai-assistant-container">
+      <div class="divider"></div>
+      <div class="ai-assistant-item">
+        <div class="user-avatar ai-assistant-avatar">
+          <img src="/default_room_robot_avatar.jpg" alt="AI助理头像" @error="onAvatarError">
+        </div>
+        <div class="user-info">
+          <div class="user-name">AI助理</div>
+          <div class="ai-assistant-tip">可以通过聊天框@AI助理</div>
         </div>
       </div>
     </div>
@@ -251,7 +269,13 @@ const emit = defineEmits([
 
 // 添加倒计时状态
 const countdownSeconds = ref(0);
-const countdownInterval = ref(null);
+let countdownTimer = null;
+
+// 添加调试模式开关
+const debug = ref(false);
+
+// 选中的用户
+const selectedUserId = ref(null);
 
 // 计算倒计时百分比
 const countdownPercentage = computed(() => {
@@ -262,21 +286,21 @@ const countdownPercentage = computed(() => {
 // 监听当前发言者的变化
 watch(() => props.currentSpeakerId, (newSpeakerId, oldSpeakerId) => {
   // 清除旧的倒计时
-  if (countdownInterval.value) {
-    clearInterval(countdownInterval.value);
-    countdownInterval.value = null;
+  if (countdownTimer) {
+    clearInterval(countdownTimer);
+    countdownTimer = null;
   }
   
   // 如果有新的发言者且有超时时间，开始倒计时
   if (newSpeakerId && props.speakTimeoutSeconds > 0) {
     countdownSeconds.value = props.speakTimeoutSeconds;
-    countdownInterval.value = setInterval(() => {
+    countdownTimer = setInterval(() => {
       if (countdownSeconds.value > 0) {
         countdownSeconds.value -= 1;
       } else {
         // 倒计时结束
-        clearInterval(countdownInterval.value);
-        countdownInterval.value = null;
+        clearInterval(countdownTimer);
+        countdownTimer = null;
       }
     }, 1000);
   }
@@ -292,8 +316,8 @@ watch(() => props.speakTimeoutSeconds, (newTimeout) => {
 
 // 在组件卸载时清除倒计时
 onBeforeUnmount(() => {
-  if (countdownInterval.value) {
-    clearInterval(countdownInterval.value);
+  if (countdownTimer) {
+    clearInterval(countdownTimer);
   }
 });
 
@@ -314,9 +338,6 @@ const handleToggleCollapse = () => {
     }, 300); // 与CSS过渡时间匹配
   }, 150);
 };
-
-// 添加选中用户状态
-const selectedUserId = ref(null);
 
 // 切换显示用户操作按钮
 const toggleActionButtons = (userId) => {
@@ -575,13 +596,24 @@ const getVotedTargetName = () => {
 
 // 获取投票计数
 const getVoteCount = (userId) => {
+  // 确保roomStore已被导入并正确初始化
   const roomStore = useRoomStore();
+  
+  // 对voteCount进行调试输出
+  if (roomStore.gamePhase === 'voting' && userId) {
+    console.log(`[UserList] 获取玩家 ${userId} 的投票数：`, 
+      roomStore.voteCount ? (roomStore.voteCount[userId] || 0) : 0,
+      '完整投票数据:', roomStore.voteCount);
+  }
+  
   // 确保voteCount对象存在后再访问
   if (!roomStore.voteCount) {
-    console.warn('[UserList] roomStore.voteCount未定义，返回0');
     return 0;
   }
-  return roomStore.voteCount[userId] || 0;
+  
+  // 正确获取数值格式的票数
+  const votes = roomStore.voteCount[userId];
+  return votes ? Number(votes) : 0;
 };
 
 // 获取投票用户信息
@@ -1559,5 +1591,58 @@ const handleVoteClick = () => {
   0% { transform: translateY(0); }
   50% { transform: translateY(0); }
   100% { transform: translateY(0); }
+}
+
+/* AI助理容器样式 */
+.ai-assistant-container {
+  padding: 10px 15px;
+  margin-top: 5px;
+  margin-bottom: 5px;
+  position: relative;
+}
+
+.divider {
+  height: 1px;
+  background-color: #e8e8e8;
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.ai-assistant-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 4px;
+  transition: all 0.2s;
+  background-color: rgba(245, 245, 245, 0.5);
+  border: 1px solid #f0f0f0;
+}
+
+.ai-assistant-item:hover {
+  background-color: rgba(240, 240, 240, 0.8);
+}
+
+.ai-assistant-avatar {
+  position: relative;
+  min-width: 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  overflow: hidden;
+  margin-right: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border: 2px solid #e8e8e8;
+}
+
+.ai-assistant-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ai-assistant-tip {
+  font-size: 0.75rem;
+  color: #999;
+  margin-top: 2px;
 }
 </style> 
