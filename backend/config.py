@@ -42,7 +42,7 @@ APP_PORT = int(os.getenv("APP_PORT", 8000))
 DEBUG = os.getenv("DEBUG", "True").lower() == "true"
 
 # JWT配置
-JWT_SECRET_KEY = "Kj8#mP9$vL2@nX5&hQ7*wR4!tY6^cB3%fD1?gE9#iA2$jM5@kS7&lN4*wT6!xU8^yV3%zW1?bH9#"
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-only-unsafe-key")
 JWT_ALGORITHM = "HS256"
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 25  # 与Redis TTL保持一致
 JWT_REFRESH_TOKEN_EXPIRE_DAYS = 7     # 刷新令牌有效期7天
