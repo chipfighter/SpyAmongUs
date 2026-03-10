@@ -11,14 +11,16 @@
 
 # Other files
 **/stream_output.py
-**/*.json
 backend/tests/
 backend/log.txt
-# all temporary md files in backend
-backend/docs/*.md
+# backend root temp md files (keep backend/docs/ tracked)
 backend/*.md
-**/*api_key*
 **/*.env
+
+# API keys and secrets (precise rules, replacing old **/*.json)
+**/api_keys*.json
+**/*secret*.json
+**/*api_key*
 
 # frontend related
 # Logs
