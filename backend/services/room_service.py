@@ -41,7 +41,16 @@ class RoomService:
         self.websocket_manager = websocket_manager
         self.message_service = None
         self.countdown_tasks = {}  # 房间ID -> asyncio任务的映射
-        self.game_service = GameService(self.redis_client, self.websocket_manager)
+                
+        # 获取用户服务的mongo_client
+        mongo_client = getattr(user_service, "mongo_client", None)
+                
+        # 初始化GameService，传递mongo_client
+        self.game_service = GameService(self.redis_client, self.websocket_manager, mongo_client)
+                
+        # 设置用户服务，解决循环依赖
+        self.game_service.set_user_service(user_service)
+        
         if redis_client and websocket_manager:
             logger.info("RoomService已初始化")
 
@@ -399,6 +408,8 @@ class RoomService:
             Dict包含操作结果
         """
         try:
+            user_info = await self.user_service.get_user_info(user_id)
+            
             # 1. 检查房间是否存在
             room_exists = await self.redis_client.check_room_exists(invite_code)
             if not room_exists:
@@ -413,8 +424,7 @@ class RoomService:
             # 2. 检查用户是否在房间中
             is_in_room = await self.redis_client.is_user_in_room(invite_code, user_id)
             if not is_in_room:
-                 # 即使用户不在房间的 Redis set 里，也检查并清理其状态
-                user_info = await self.user_service.get_user_info(user_id)
+                # 直接用 try 最前面获取的 user_info
                 if user_info["success"] and user_info["data"].get("current_room") == invite_code:
                     await self.user_service.update_current_room(user_id, None)
                     await self.user_service.update_user_status(user_id, USER_STATUS_ONLINE)
@@ -579,6 +589,7 @@ class RoomService:
                   每个房间对象将额外包含:
                   - current_players: int, 当前房间人数
                   - host_avatar_url: Optional[str], 房主头像URL
+                  - host_username: Optional[str], 房主用户名
         """
         try:
             public_room_codes = await self.redis_client.get_public_rooms()
@@ -611,16 +622,19 @@ class RoomService:
                     # 获取房主ID (现在 room.host_id 类型是 str)
                     host_id = room.host_id 
                     host_avatar_url = None
+                    host_username = None
                     
-                    # 获取房主头像
+                    # 获取房主信息
                     if host_id:
                         # 直接获取user_info或者拿着id去用户hash获取
                         user_info_result = await self.user_service.get_user_info(host_id)
                         if user_info_result["success"] and user_info_result.get("data"):
                            host_avatar_url = user_info_result["data"].get("avatar_url")
+                           host_username = user_info_result["data"].get("username")
                         else:
                            host_user_data = await self.redis_client.get_user(host_id)
                            host_avatar_url = host_user_data.get("avatar_url")
+                           host_username = host_user_data.get("username")
 
                     # 获取当前玩家数量
                     current_players = await self.redis_client.get_room_users_count(invite_code)
@@ -628,7 +642,8 @@ class RoomService:
                     # 准备返回给前端的数据 (基于验证过的 Room 对象)
                     room_output_dict = room.dict() # 使用 Pydantic 的 .dict() 获取字典
                     room_output_dict["current_players"] = current_players
-                    room_output_dict["host_avatar_url"] = host_avatar_url or "" 
+                    room_output_dict["host_avatar_url"] = host_avatar_url or ""
+                    room_output_dict["host_username"] = host_username or ""
 
                     augmented_rooms.append(room_output_dict)
                     

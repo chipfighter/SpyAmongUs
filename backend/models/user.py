@@ -14,7 +14,22 @@ from config import USER_STATUS_ONLINE
 
 
 class UserStatistics(BaseModel):
-    total_games: int = 0
+    # 游戏总数据
+    total_games: int = 0  # 总游戏次数
+    win_count: int = 0    # 总胜利次数
+    win_rate: float = 0.0 # 总胜率
+    
+    # 平民身份数据
+    civilian_games: int = 0  # 作为平民的游戏次数
+    civilian_wins: int = 0   # 作为平民的胜利次数
+    civilian_win_rate: float = 0.0  # 平民胜率
+    
+    # 卧底身份数据
+    spy_games: int = 0    # 作为卧底的游戏次数
+    spy_wins: int = 0     # 作为卧底的胜利次数
+    spy_win_rate: float = 0.0  # 卧底胜率
+    
+    # 兼容旧版本，保留win_rates字典
     win_rates: Dict[str, float] = Field(default_factory=lambda: {"civilian": 0.0, "spy": 0.0})
 
 
@@ -38,6 +53,19 @@ class User(BaseModel):
     # 用户数据
     statistics: UserStatistics = UserStatistics()  # 用户统计数据
     style_profile: StyleProfile = StyleProfile()  # 结构化画像数据
+    
+    # 新增字段
+    is_admin: bool = False  # 是否是管理员
+    register_time: int = Field(default_factory=lambda: int(time.time()))  # 注册时间戳(秒)
+    points: int = 0  # 当前积分
+    
+    # 禁言相关
+    is_muted: bool = False  # 是否被禁言
+    mute_until: int = 0  # 禁言截止时间戳(秒)，0表示未被禁言
+    
+    # 禁止行为相关
+    is_banned: bool = False  # 是否被禁止行为
+    ban_until: int = 0  # 禁止行为截止时间戳(秒)，0表示未被禁止行为
 
     def dict(self, *args, **kwargs):
         """重写dict方法，排除敏感信息（盐值+密码Hash值）"""
@@ -67,6 +95,9 @@ class User(BaseModel):
 
         # 加密密码+初始化盐值
         password_hash, salt = cls.hash_password(password)
+        
+        # 使用当前时间作为注册时间
+        current_time = int(time.time())
 
         return cls(
             id=user_id,
@@ -76,7 +107,14 @@ class User(BaseModel):
             status=USER_STATUS_ONLINE,
             current_room=None,
             statistics=UserStatistics(),
-            style_profile=StyleProfile()
+            style_profile=StyleProfile(),
+            register_time=current_time,
+            is_admin=False,
+            points=0,
+            is_muted=False,
+            mute_until=0,
+            is_banned=False,
+            ban_until=0
         )
 
     def verify_password(self, password: str) -> bool:

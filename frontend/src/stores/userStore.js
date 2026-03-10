@@ -57,8 +57,15 @@ export const useUserStore = defineStore('user', {
         localStorage.setItem('userInfo', JSON.stringify({
           id: this.user.id,
           username: this.user.username,
-          username: this.user.username,
-          avatar_url: this.user.avatar_url
+          avatar_url: this.user.avatar_url,
+          // 新增字段
+          is_admin: this.user.is_admin || false,
+          register_time: this.user.register_time,
+          points: this.user.points || 0,
+          is_muted: this.user.is_muted || false,
+          mute_until: this.user.mute_until || 0,
+          is_banned: this.user.is_banned || false,
+          ban_until: this.user.ban_until || 0
         }))
       }
     },
@@ -97,12 +104,19 @@ export const useUserStore = defineStore('user', {
           this.user = {
             id: data.id,
             username: data.username,
-            username: data.username,
             avatar_url: data.avatar_url,
             status: data.status,
             current_room: data.current_room,
             statistics: data.statistics,
-            style_profile: data.style_profile
+            style_profile: data.style_profile,
+            // 新增字段
+            is_admin: data.is_admin || false,
+            register_time: data.register_time || Math.floor(Date.now() / 1000),
+            points: data.points || 0,
+            is_muted: data.is_muted || false,
+            mute_until: data.mute_until || 0,
+            is_banned: data.is_banned || false,
+            ban_until: data.ban_until || 0
           }
           this.accessToken = data.access_token
           this.refreshToken = data.refresh_token
@@ -140,12 +154,19 @@ export const useUserStore = defineStore('user', {
           this.user = {
             id: data.user_data.id,
             username: data.user_data.username,
-            username: data.user_data.username,
             avatar_url: data.user_data.avatar_url,
             status: data.user_data.status,
             current_room: data.user_data.current_room,
             statistics: data.user_data.statistics || {},
-            style_profile: data.user_data.style_profile || {}
+            style_profile: data.user_data.style_profile || {},
+            // 新增字段
+            is_admin: data.user_data.is_admin || false,
+            register_time: data.user_data.register_time || Math.floor(Date.now() / 1000),
+            points: data.user_data.points || 0,
+            is_muted: data.user_data.is_muted || false,
+            mute_until: data.user_data.mute_until || 0,
+            is_banned: data.user_data.is_banned || false,
+            ban_until: data.user_data.ban_until || 0
           }
           this.accessToken = data.user_data.access_token
           this.refreshToken = data.user_data.refresh_token

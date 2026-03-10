@@ -28,14 +28,17 @@ from config import (
 logger = logging.getLogger(__name__)
 
 class GameService:
-    def __init__(self, redis_client=None, websocket_manager=None):
+    def __init__(self, redis_client=None, websocket_manager=None, mongo_client=None):
         self.redis_client = redis_client
         self.websocket_manager = websocket_manager
+        self.mongo_client = mongo_client
         self.message_service = None
         self.llm_pipeline = None  # 添加LLM转发层引用
         self.timeout_tasks = {}  # 用于跟踪超时任务
         # 新增：跟踪房间遗言超时任务的字典
         self.last_words_timeout_tasks = {}
+        # 用户服务引用，避免循环依赖
+        self.user_service = None
         if redis_client and websocket_manager:
             logger.info("GameService已初始化")
     
@@ -48,6 +51,11 @@ class GameService:
         """设置LLM转发层，用于AI玩家发言"""
         self.llm_pipeline = llm_pipeline
         logger.info("GameService已连接到LLM Pipeline")
+        
+    def set_user_service(self, user_service):
+        """设置用户服务，避免循环依赖"""
+        self.user_service = user_service
+        logger.info("GameService已连接到UserService")
     
     async def poll_god_role(self, invite_code: str) -> None:
         """
@@ -1657,6 +1665,47 @@ class GameService:
             
             logger.info(f"已广播游戏结果: 房间 {room_id}，获胜方: {winning_role}")
             
+            # 更新每个真人玩家的游戏统计数据
+            for player_id, role in all_roles.items():
+                # 跳过AI玩家
+                if player_id.startswith("llm_player_") or player_id.startswith("ai_"):
+                    continue
+                
+                # 确定玩家是否获胜
+                is_winner = (role == ROLE_CIVILIAN and winning_role == ROLE_CIVILIAN) or \
+                           (role == ROLE_SPY and winning_role == ROLE_SPY)
+                
+                # 创建游戏结果数据
+                game_result = {
+                    "role": role,
+                    "win": is_winner
+                }
+                
+                try:
+                    # 使用已设置的用户服务或创建临时实例
+                    user_service = self.user_service
+                    
+                    # 如果用户服务未设置，则创建临时实例
+                    if not user_service and self.redis_client and self.mongo_client:
+                        # 动态导入，避免循环依赖
+                        from services.user_service import UserService
+                        user_service = UserService(self.redis_client, self.mongo_client)
+                    
+                    if not user_service:
+                        logger.error(f"无法更新玩家 {player_id} 统计数据: 用户服务不可用")
+                        continue
+                    
+                    # 更新统计数据
+                    await user_service.update_game_statistics(player_id, game_result)
+                    
+                    # 更新积分（胜利+3，失败+1）
+                    points_delta = 3 if is_winner else 1
+                    await user_service.update_user_points(player_id, points_delta)
+                    
+                    logger.info(f"已更新玩家 {player_id} 的游戏统计数据: 角色={role}, 获胜={is_winner}, 积分+{points_delta}")
+                except Exception as stats_error:
+                    logger.error(f"更新玩家 {player_id} 统计数据失败: {str(stats_error)}")
+            
             # 清理房间游戏数据
             await self._cleanup_room_game_data(room_id)
             
@@ -2243,10 +2292,10 @@ class GameService:
                 "spy_word": room_data.get("word_spy", ""),
                 "chat_history": chat_history
             }
-            
+
             # 设置默认遗言，以防LLM生成失败
             default_last_words = "我怀疑玩家2和玩家3，因为他们描述过于模糊且相互矛盾。特别是对颜色和形状的表述与其他人完全不同。请仔细观察他们的用词！"
-            
+
             # 调用LLM生成遗言，设置超时机制
             last_words_content = ""
             llm_success = False
@@ -2348,29 +2397,109 @@ class GameService:
                         logger.info(f"检测到前后部分高度相似，仅保留前半部分: {cleaned_content}")
                 
                 # 确保内容不为空
-                if not cleaned_content.strip():
+                if not cleaned_content:
                     cleaned_content = default_last_words
-                    logger.warning("清洗后的内容为空，使用默认遗言")
                 
-                # 使用清理后的内容
-                await self.handle_last_words(
-                    room_id=room_id,
-                    player_id=ai_player_id,
-                    message={"content": cleaned_content, "room_id": room_id, "type": "last_words"}
+                # 构建遗言消息
+                last_words_message = {
+                    "type": "last_words",
+                    "user_id": ai_player_id,
+                    "username": f"AI玩家_{ai_player_id.replace('llm_player_', '')}",
+                    "content": cleaned_content,
+                    "timestamp": int(time.time() * 1000),
+                    "room_id": room_id
+                }
+                
+                # 记录到聊天历史
+                if self.message_service:
+                    await self.message_service.process_message(last_words_message)
+                
+                logger.info(f"AI玩家 {ai_player_id} 的遗言已记录")
+                
+                # 清除遗言玩家信息
+                await self.redis_client.hdel(room_key, "last_words_player")
+                
+                # 取消遗言超时任务（如果存在）
+                if room_id in self.last_words_timeout_tasks:
+                    timeout_task = self.last_words_timeout_tasks[room_id]
+                    if not timeout_task.done() and not timeout_task.cancelled():
+                        timeout_task.cancel()
+                        logger.info(f"已取消房间 {room_id} 的遗言超时任务")
+                    # 从字典中移除
+                    del self.last_words_timeout_tasks[room_id]
+                
+                # 广播遗言阶段结束消息
+                end_message = {
+                    "type": "last_words_phase_end",
+                    "player_id": ai_player_id,
+                    "timestamp": int(time.time() * 1000)
+                }
+                
+                await self.websocket_manager.broadcast_message(
+                    invite_code=room_id,
+                    message=end_message,
+                    is_special=False
                 )
-                logger.info(f"AI玩家 {ai_player_id} 遗言处理成功")
-            except Exception as e:
-                logger.error(f"处理AI玩家 {ai_player_id} 遗言失败: {str(e)}")
-                # 尝试错误恢复
-                try:
-                    logger.warning(f"AI遗言错误恢复：房间 {room_id}，尝试进入下一轮")
+                
+                logger.info(f"已广播AI玩家 {ai_player_id} 的遗言阶段结束消息")
+                
+                # 等待1.5秒，让玩家有时间阅读遗言
+                await asyncio.sleep(1.5)
+                
+                # 确保当前阶段为last_words时才进入下一轮
+                current_phase = await self.redis_client.hget(room_key, "current_phase")
+                logger.info(f"等待结束，当前房间 {room_id} 阶段: {current_phase}")
+                
+                # 重要修复：确保游戏状态是playing
+                game_status = await self.redis_client.hget(room_key, "status")
+                if not game_status or game_status != GAME_STATUS_PLAYING:
+                    logger.warning(f"房间 {room_id} 游戏状态异常: {game_status}，重新设置为playing")
+                    await self.redis_client.hset(room_key, "status", GAME_STATUS_PLAYING)
+                
+                # 检查游戏是否结束
+                game_end_result = await self.check_game_end_condition(room_id)
+                
+                if game_end_result["game_end"]:
+                    # 游戏结束，广播游戏结果
+                    logger.info(f"游戏结束，广播游戏结果: {game_end_result}")
+                    await self.broadcast_game_result(room_id, game_end_result)
+                else:
+                    # 游戏未结束，进入下一轮
+                    logger.info(f"游戏未结束，房间 {room_id} 开始进入下一轮")
+                    
+                    # 确保阶段设置为last_words，以便正确进入下一轮
                     await self.redis_client.hset(room_key, "current_phase", "last_words")
-                    await self.redis_client.hdel(room_key, "last_words_player")
-                    # 确保游戏状态是playing
-                    await self.redis_client.hset(room_key, "game_status", GAME_STATUS_PLAYING)
+                    
+                    # 添加额外日志跟踪
+                    logger.info(f"设置房间 {room_id} 阶段为last_words后准备进入下一轮")
+                    
+                    # 创建一个新的任务来处理下一轮，避免阻塞当前流程
                     asyncio.create_task(self._safe_start_next_round(room_id))
-                except Exception as recovery_error:
-                    logger.error(f"AI遗言错误恢复失败: {str(recovery_error)}")
+                
+            except Exception as e:
+                logger.error(f"处理AI玩家 {ai_player_id} 遗言时出错: {str(e)}", exc_info=True)
+                # 出错时使用默认遗言
+                last_words_message = {
+                    "type": "last_words",
+                    "user_id": ai_player_id,
+                    "username": f"AI玩家_{ai_player_id.replace('llm_player_', '')}",
+                    "content": default_last_words,
+                    "timestamp": int(time.time() * 1000),
+                    "room_id": room_id
+                }
+                
+                # 广播默认遗言
+                await self.websocket_manager.broadcast_message(
+                    invite_code=room_id,
+                    message=last_words_message,
+                    is_special=False
+                )
+                
+                # 记录到聊天历史
+                if self.message_service:
+                    await self.message_service.process_message(last_words_message)
+                
+                logger.info(f"AI玩家 {ai_player_id} 使用默认遗言: {default_last_words}")
         except Exception as e:
             logger.error(f"为AI玩家 {ai_player_id} 生成遗言失败: {str(e)}", exc_info=True)
             try:
@@ -2524,10 +2653,19 @@ class GameService:
                 current_phase = "last_words"
             
             if not last_words_player or last_words_player != player_id:
-                logger.warning(f"玩家 {player_id} 无权发送遗言，当前遗言玩家为 {last_words_player}")
+                # 如果该玩家不是遗言玩家，则将其消息作为普通消息处理
+                logger.warning(f"玩家 {player_id} 无权发送遗言，当前遗言玩家为 {last_words_player}，作为普通消息处理")
+                
+                # 确保game_service是正确的状态
+                # 在这里不要返回错误，让消息被正常处理为普通消息
+                if self.message_service:
+                    # 修改消息类型为chat，去掉type=last_words
+                    message["type"] = "chat"
+                    await self.message_service.process_message(message)
+                
                 return {
-                    "success": False,
-                    "message": "你没有权限发送遗言"
+                    "success": True,
+                    "message": "消息已作为普通消息处理"
                 }
             
             # 2. 检查消息内容
@@ -2604,13 +2742,14 @@ class GameService:
             await asyncio.sleep(1.5)
             
             # 确保当前阶段为last_words时才进入下一轮
+            current_phase = await self.redis_client.hget(room_key, "current_phase")
             logger.info(f"等待结束，当前房间 {room_id} 阶段: {current_phase}")
             
             # 重要修复：确保游戏状态是playing
-            game_status = await self.redis_client.hget(room_key, "game_status")
+            game_status = await self.redis_client.hget(room_key, "status")
             if not game_status or game_status != GAME_STATUS_PLAYING:
                 logger.warning(f"房间 {room_id} 游戏状态异常: {game_status}，重新设置为playing")
-                await self.redis_client.hset(room_key, "game_status", GAME_STATUS_PLAYING)
+                await self.redis_client.hset(room_key, "status", GAME_STATUS_PLAYING)
             
             # 无论当前阶段是什么，都强制进行游戏结束检查和下一轮处理
             # 检查游戏是否结束
@@ -2684,14 +2823,23 @@ class GameService:
                 return
                 
             # 检查游戏状态
-            game_status = await self.redis_client.hget(room_key, "game_status")
+            game_status = await self.redis_client.hget(room_key, "status")
             if game_status != GAME_STATUS_PLAYING:
-                logger.warning(f"安全启动下一轮: 房间 {room_id} 当前游戏状态不是进行中 ({game_status})，不启动下一轮")
-                return
+                logger.warning(f"安全启动下一轮: 房间 {room_id} 当前游戏状态不是进行中 ({game_status})，尝试修复并启动下一轮")
+                await self.redis_client.hset(room_key, "status", GAME_STATUS_PLAYING)
+                
+            # 检查当前阶段，如果不是last_words，设置为last_words以确保能正确过渡
+            current_phase = await self.redis_client.hget(room_key, "current_phase")
+            if current_phase != "last_words":
+                logger.warning(f"安全启动下一轮: 房间 {room_id} 当前阶段不是last_words ({current_phase})，尝试修复")
+                await self.redis_client.hset(room_key, "current_phase", "last_words")
                 
             # 检查存活玩家是否足够
             alive_players_key = ROOM_ALIVE_PLAYERS_KEY_PREFIX % room_id
             alive_players_count = await self.redis_client.zcard(alive_players_key)
+            alive_players = await self.redis_client.zrange(alive_players_key, 0, -1, withscores=True)
+            
+            logger.info(f"[DEBUG] 所有存活玩家及分数: {alive_players}")
             
             if alive_players_count < 2:
                 logger.warning(f"安全启动下一轮: 房间 {room_id} 存活玩家数量不足 ({alive_players_count})，检查游戏结束条件")
@@ -2746,78 +2894,115 @@ class GameService:
             room_data = await self.redis_client.get_room_basic_data(room_id)
             current_round = int(room_data.get("current_round", "1"))
             max_rounds = int(room_data.get("max_rounds", "5"))
-            current_phase = room_data.get("current_phase", "")
             
-            # 打印详细信息以便调试
-            logger.info(f"开始下一轮游戏: 房间 {room_id}, 当前回合 {current_round}, 最大回合 {max_rounds}, 当前阶段 {current_phase}")
+            logger.info(f"[DEBUG] 尝试从 room:{room_id}:alive_players 获取存活玩家列表")
+            alive_players_key = ROOM_ALIVE_PLAYERS_KEY_PREFIX % room_id
+            key_exists = await self.redis_client.exists(alive_players_key)
+            logger.info(f"[DEBUG] 键 {alive_players_key} 是否存在: {key_exists}")
             
-            # 2. 检查是否达到最大回合数
-            if current_round >= max_rounds:
-                logger.info(f"房间 {room_id} 已达到最大回合数 {max_rounds}，宣布平局")
+            if key_exists:
+                all_alive_players = await self.redis_client.zrange(alive_players_key, 0, -1, withscores=True)
+                logger.info(f"[DEBUG] 所有存活玩家及分数: {all_alive_players}")
+            else:
+                logger.error(f"[DEBUG] 存活玩家列表不存在，无法开始新一轮")
+                return
+            
+            # 2. 更新当前回合数
+            next_round = current_round + 1
+            logger.info(f"开始房间 {room_id} 第 {next_round} 轮游戏")
+            
+            if next_round > max_rounds:
+                logger.info(f"房间 {room_id} 已达到最大回合数 {max_rounds}，游戏将以平局结束")
                 await self.broadcast_draw_result(room_id)
                 return
                 
-            # 3. 增加回合数
-            next_round = current_round + 1
+            # 3. 更新Redis中的回合数和游戏阶段
             await self.redis_client.hset(room_key, "current_round", str(next_round))
+            await self.redis_client.hset(room_key, "current_phase", "speaking")
             
-            # 4. 重置发言顺序
-            round_speakers_key = f"room:{room_id}:round_speakers"
-            await self.redis_client.delete(round_speakers_key)
+            # 确保游戏状态正确
+            await self.redis_client.hset(room_key, "status", GAME_STATUS_PLAYING)
             
-            # 5. 清理之前阶段的残留数据
-            # 确保没有残留的last_words_player
-            if await self.redis_client.hget(room_key, "last_words_player"):
-                logger.warning(f"房间 {room_id} 开始新回合时发现残留的last_words_player，移除它")
-                await self.redis_client.hdel(room_key, "last_words_player")
-            
-            # 确保投票数据被清理
-            vote_key = ROOM_VOTES_KEY_PREFIX % (room_id, current_round)
-            if await self.redis_client.exists(vote_key):
-                logger.warning(f"房间 {room_id} 开始新回合时发现残留的投票数据，清理它")
-                await self.redis_client.delete(vote_key)
-            
-            # 6. 开始发言阶段
-            logger.info(f"房间 {room_id} 开始第 {next_round} 轮游戏的发言阶段")
-            await self.start_speaking_phase(room_id)
-            
-            # 7. 广播新回合开始消息
-            new_round_message = {
-                "type": "new_round_start",
+            # 4. 广播新一轮开始消息
+            # 获取当前发言者，确保存在活跃玩家
+            try:
+                current_speaker = await self.redis_client.zrange(alive_players_key, 0, 0)
+                logger.info(f"[DEBUG] zrange(0,0)返回的当前发言者: {current_speaker}, 类型: {type(current_speaker)}")
+                if current_speaker and len(current_speaker) > 0:
+                    current_speaker = current_speaker[0]
+                    logger.info(f"[DEBUG] 当前发言者确定为: {current_speaker}")
+                else:
+                    logger.error(f"[DEBUG] 无法获取当前发言者，发言者列表为空")
+                    return
+            except Exception as e:
+                logger.error(f"获取当前发言者失败: {str(e)}", exc_info=True)
+                return
+                
+            # 获取发言者信息
+            if current_speaker.startswith("llm_player_"):
+                speaker_name = f"AI玩家_{current_speaker.replace('llm_player_', '')}"
+            else:
+                speaker_data = await self.redis_client.hgetall(f"user:{current_speaker}")
+                speaker_name = speaker_data.get("username", "未知玩家")
+                
+            # 5. 广播新回合开始消息
+            round_start_message = {
+                "type": "round_start",
                 "round": next_round,
+                "max_rounds": max_rounds,
+                "current_phase": "speaking",
+                "current_speaker": current_speaker,
+                "speaker_name": speaker_name,
                 "timestamp": int(time.time() * 1000)
             }
             
             await self.websocket_manager.broadcast_message(
                 invite_code=room_id,
-                message=new_round_message,
+                message=round_start_message,
                 is_special=False
             )
             
+            logger.info(f"房间 {room_id} 当前发言者: {speaker_name} ({current_speaker})")
             logger.info(f"房间 {room_id} 开始第 {next_round} 轮游戏，广播消息成功")
+            
+            # 6. 清理本轮发言者记录
+            round_speakers_key = f"room:{room_id}:round_speakers"
+            await self.redis_client.delete(round_speakers_key)
+            
+            # 7. 如果当前发言者是AI玩家，触发AI发言
+            if current_speaker.startswith("llm_player_"):
+                logger.info(f"当前发言者是AI玩家 {current_speaker}，触发AI发言")
+                # 创建AI发言任务
+                asyncio.create_task(self.handle_ai_player_speaking(room_id, current_speaker))
             
         except Exception as e:
             logger.error(f"开始下一轮游戏失败: {str(e)}", exc_info=True)
-            # 尝试恢复游戏流程
+            # 尝试恢复游戏状态
             try:
+                # 获取房间用户，检查是否还有玩家
+                room_users = await self.redis_client.get_room_users(room_id)
+                if not room_users or len(room_users) == 0:
+                    logger.warning(f"房间 {room_id} 没有玩家，无法恢复游戏状态")
+                    return
+                    
+                # 尝试重置游戏状态
                 room_key = f"{ROOM_KEY_PREFIX}{room_id}"
-                current_round = await self.redis_client.hget(room_key, "current_round")
+                await self.redis_client.hset(room_key, "status", GAME_STATUS_WAITING)
+                await self.redis_client.hset(room_key, "current_phase", "")
                 
-                if current_round:
-                    next_round = int(current_round) + 1
-                    logger.warning(f"错误恢复: 设置房间 {room_id} 进入回合 {next_round} 并重新尝试开始发言阶段")
-                    await self.redis_client.hset(room_key, "current_round", str(next_round))
-                    await self.redis_client.hset(room_key, "current_phase", "speaking")
-                    
-                    # 重置发言顺序
-                    round_speakers_key = f"room:{room_id}:round_speakers"
-                    await self.redis_client.delete(round_speakers_key)
-                    
-                    # 直接开始发言阶段
-                    asyncio.create_task(self.start_speaking_phase(room_id))
+                # 通知玩家游戏异常结束
+                await self.websocket_manager.broadcast_message(
+                    invite_code=room_id,
+                    message={
+                        "type": "game_error",
+                        "message": "游戏状态异常，已重置为等待状态",
+                        "timestamp": int(time.time() * 1000)
+                    },
+                    is_special=False
+                )
             except Exception as recovery_error:
-                logger.error(f"恢复游戏流程失败: {str(recovery_error)}", exc_info=True)
-            
+                logger.error(f"恢复游戏状态失败: {str(recovery_error)}", exc_info=True)
+
     async def broadcast_draw_result(self, room_id: str) -> None:
         """
         广播平局结果并清理房间数据

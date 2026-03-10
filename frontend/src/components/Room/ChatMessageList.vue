@@ -297,8 +297,6 @@ watch(() => props.messages, (newMessages) => {
 
 .last-words-content {
   /* 为遗言内容添加特殊样式 */
-  border-left: 3px solid #cccccc;
-  padding-left: 8px;
 }
 
 .eliminated-avatar {

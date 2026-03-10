@@ -16,6 +16,10 @@
         <button class="join-room-btn" @click="openJoinRoomDialog">
           <i class="icon">→</i> 加入房间
         </button>
+        <!-- 新增：筛选房间按钮 -->
+        <button class="filter-room-btn" @click="openFilterRoomDialog">
+          <i class="icon">🔍</i> 筛选房间
+        </button>
       </div>
       
       <div class="logo">谁是卧底</div>
@@ -31,7 +35,21 @@
             @click.stop="toggleUserMenu"
           >
         </div>
-        <button @click="handleLogout" class="logout-btn" title="登出">
+        <!-- 根据用户类型显示不同按钮 -->
+        <button 
+          v-if="userStore.user?.is_admin" 
+          @click="backToAdmin" 
+          class="back-admin-btn" 
+          title="返回管理控制台"
+        >
+          返回控制台
+        </button>
+        <button 
+          v-else 
+          @click="handleLogout" 
+          class="logout-btn" 
+          title="登出"
+        >
           退出
         </button>
       </div>
@@ -46,6 +64,10 @@
     >
       <div class="menu-item" @click="goToProfile">
         <span class="menu-icon">👤</span> 个人信息
+      </div>
+      <!-- 管理员菜单项 -->
+      <div v-if="userStore.user?.is_admin" class="menu-item" @click="backToAdmin">
+        <span class="menu-icon">🔧</span> 管理控制台
       </div>
       <div class="menu-item disabled">
         <span class="menu-icon">⚙️</span> 设置
@@ -244,6 +266,122 @@
         </div>
       </div>
     </div>
+    
+    <!-- 筛选房间弹窗 -->
+    <div class="dialog-overlay" v-if="showFilterRoomDialog" @click.self="showFilterRoomDialog = false">
+      <div class="filter-room-dialog">
+        <div class="dialog-header">
+          <h2>筛选房间</h2>
+          <button class="close-btn" @click="showFilterRoomDialog = false">×</button>
+        </div>
+        <div class="dialog-body">
+          <!-- 新增：按房间名筛选 -->
+          <div class="form-group">
+            <label>房间名称</label>
+            <div class="filter-options">
+              <label class="filter-option">
+                <input type="checkbox" v-model="filterOptions.roomName">
+                <span>包含</span>
+                <input 
+                  type="text" 
+                  v-model="filterOptions.roomNameValue" 
+                  class="text-input"
+                  :disabled="!filterOptions.roomName"
+                  placeholder="输入房间名关键词"
+                >
+              </label>
+            </div>
+          </div>
+          
+          <!-- 新增：按房主用户名筛选 -->
+          <div class="form-group">
+            <label>房主用户名</label>
+            <div class="filter-options">
+              <label class="filter-option">
+                <input type="checkbox" v-model="filterOptions.hostName">
+                <span>包含</span>
+                <input 
+                  type="text" 
+                  v-model="filterOptions.hostNameValue" 
+                  class="text-input"
+                  :disabled="!filterOptions.hostName"
+                  placeholder="输入房主用户名关键词"
+                >
+              </label>
+            </div>
+          </div>
+          
+          <!-- 新增：按用户ID筛选 -->
+          <div class="form-group">
+            <label>用户ID</label>
+            <div class="filter-options">
+              <label class="filter-option">
+                <input type="checkbox" v-model="filterOptions.userId">
+                <span>精确匹配</span>
+                <input 
+                  type="text" 
+                  v-model="filterOptions.userIdValue" 
+                  class="text-input"
+                  :disabled="!filterOptions.userId"
+                  placeholder="输入完整用户ID"
+                >
+              </label>
+            </div>
+          </div>
+          
+          <div class="form-group">
+            <label>房间状态</label>
+            <div class="filter-options">
+              <label class="filter-option">
+                <input type="checkbox" v-model="filterOptions.waitingOnly">
+                <span>仅等待中</span>
+              </label>
+            </div>
+          </div>
+          
+          <div class="form-group">
+            <label>玩家数量</label>
+            <div class="filter-options">
+              <label class="filter-option">
+                <input type="checkbox" v-model="filterOptions.minPlayers">
+                <span>至少有 </span>
+                <input 
+                  type="number" 
+                  v-model.number="filterOptions.minPlayersCount" 
+                  min="1" 
+                  max="8" 
+                  class="small-input"
+                  :disabled="!filterOptions.minPlayers"
+                >
+                <span> 名玩家</span>
+              </label>
+            </div>
+          </div>
+          
+          <div class="form-group">
+            <label>卧底数量</label>
+            <div class="filter-options">
+              <label class="filter-option">
+                <input type="checkbox" v-model="filterOptions.spyCount">
+                <span>卧底数量为 </span>
+                <input 
+                  type="number" 
+                  v-model.number="filterOptions.spyCountValue" 
+                  min="1" 
+                  max="3" 
+                  class="small-input"
+                  :disabled="!filterOptions.spyCount"
+                >
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button class="cancel-btn" @click="resetFilters">重置</button>
+          <button class="create-btn" @click="applyFilters">应用筛选</button>
+        </div>
+      </div>
+    </div>
 
     <!-- 新增：上下文菜单 -->
     <div 
@@ -259,6 +397,20 @@
         <i class="fas fa-info-circle"></i> 房间详情 (暂不可用)
       </div>
     </div>
+  </div>
+  
+  <!-- 聊天大厅按钮 (右下角) -->
+  <div class="float-buttons">
+    <!-- 商城按钮 (喇叭左侧) -->
+    <button class="shop-btn" @click="openShop">
+      <span class="big-icon">🛒</span>
+    </button>
+
+    <!-- 小喇叭按钮 (右下角) -->
+    <button class="chat-lobby-btn" @click="openChatLobby">
+      <span class="big-icon">📢</span>
+      <span v-if="hasNewMessages" class="notification-dot"></span>
+    </button>
   </div>
 </template>
 
@@ -351,6 +503,149 @@ const menuPosition = ref({ top: 0, left: 0 })
 
 // 反馈模态框相关
 const showFeedbackModal = ref(false)
+
+// 新增：聊天大厅相关
+const hasNewMessages = ref(false)
+const openChatLobby = () => {
+  // TODO: 实现聊天大厅功能
+  console.log('聊天大厅功能尚未实现')
+  hasNewMessages.value = false // 重置通知状态
+}
+
+// 新增：商城相关
+const openShop = () => {
+  // TODO: 实现商城功能
+  console.log('商城功能尚未实现')
+}
+
+// 新增：筛选房间相关
+const showFilterRoomDialog = ref(false)
+const filterOptions = ref({
+  // 原有筛选选项
+  waitingOnly: false,
+  minPlayers: false,
+  minPlayersCount: 3,
+  spyCount: false,
+  spyCountValue: 1,
+  // 新增筛选选项
+  roomName: false,
+  roomNameValue: '',
+  hostName: false,
+  hostNameValue: '',
+  userId: false,
+  userIdValue: ''
+})
+const filteredRooms = ref([])
+const isFiltering = ref(false)
+
+// 打开筛选房间对话框
+const openFilterRoomDialog = () => {
+  showFilterRoomDialog.value = true
+}
+
+// 重置筛选条件
+const resetFilters = () => {
+  filterOptions.value = {
+    // 原有筛选选项
+    waitingOnly: false,
+    minPlayers: false,
+    minPlayersCount: 3,
+    spyCount: false,
+    spyCountValue: 1,
+    // 新增筛选选项
+    roomName: false,
+    roomNameValue: '',
+    hostName: false,
+    hostNameValue: '',
+    userId: false,
+    userIdValue: ''
+  }
+}
+
+// 应用筛选条件
+const applyFilters = () => {
+  showFilterRoomDialog.value = false
+  isFiltering.value = true
+  
+  // 应用筛选逻辑
+  filteredRooms.value = publicRooms.value.filter(room => {
+    // 检查房间状态
+    if (filterOptions.value.waitingOnly && room.status !== 'waiting') {
+      return false
+    }
+    
+    // 检查最小玩家数
+    if (filterOptions.value.minPlayers && room.current_players < filterOptions.value.minPlayersCount) {
+      return false
+    }
+    
+    // 检查卧底数量
+    if (filterOptions.value.spyCount && room.spy_count !== filterOptions.value.spyCountValue) {
+      return false
+    }
+    
+    // 新增：按房间名筛选
+    if (filterOptions.value.roomName && filterOptions.value.roomNameValue.trim() !== '') {
+      const roomNameLower = (room.room_name || '').toLowerCase()
+      const searchValueLower = filterOptions.value.roomNameValue.toLowerCase().trim()
+      if (!roomNameLower.includes(searchValueLower)) {
+        return false
+      }
+    }
+    
+    // 新增：按房主用户名筛选
+    if (filterOptions.value.hostName && filterOptions.value.hostNameValue.trim() !== '') {
+      // 这里需要从房间找到房主信息
+      // 房主信息可能来自房间users数组或host_id字段
+      let hostUsername = ''
+      
+      // 尝试获取房主用户名（如果数据结构允许）
+      if (room.host_username) {
+        hostUsername = room.host_username
+      } else if (room.users && Array.isArray(room.users)) {
+        // 尝试从用户列表中找到房主
+        const hostUser = room.users.find(user => user.id === room.host_id)
+        if (hostUser) {
+          hostUsername = hostUser.username || ''
+        }
+      }
+      
+      const hostNameLower = hostUsername.toLowerCase()
+      const searchValueLower = filterOptions.value.hostNameValue.toLowerCase().trim()
+      if (!hostNameLower.includes(searchValueLower)) {
+        return false
+      }
+    }
+    
+    // 新增：按用户ID筛选
+    if (filterOptions.value.userId && filterOptions.value.userIdValue.trim() !== '') {
+      const searchUserId = filterOptions.value.userIdValue.trim()
+      
+      // 检查房主ID是否匹配
+      if (room.host_id === searchUserId) {
+        return true
+      }
+      
+      // 检查房间内其他用户ID是否匹配
+      if (room.users && Array.isArray(room.users)) {
+        const userExists = room.users.some(user => user.id === searchUserId)
+        if (!userExists) {
+          return false
+        }
+      } else {
+        // 如果没有用户列表信息，则只检查房主ID
+        return false
+      }
+    }
+    
+    return true
+  })
+  
+  // 如果启用了筛选，在UI上显示筛选结果
+  if (isFiltering.value) {
+    publicRooms.value = filteredRooms.value
+  }
+}
 
 const toggleUserMenu = (event) => {
   event.stopPropagation() // 阻止事件冒泡
@@ -474,6 +769,9 @@ onBeforeUnmount(() => {
 
 // 修改refreshRooms函数，保证所有场景下刷新动画一致
 async function refreshRooms() {
+  // 清除筛选状态
+  isFiltering.value = false;
+  
   // 避免并发刷新请求
   if (isRefreshingInProgress.value || window._refreshStates.isRefreshing) {
     console.log('[LobbyView] 刷新操作正在进行中，跳过重复刷新');
@@ -1160,6 +1458,11 @@ function handleVisibilityChange() {
     pauseAutoRefresh()
   }
 }
+
+// 返回管理控制台
+const backToAdmin = () => {
+  router.push('/admin')
+}
 </script>
 
 <style scoped>
@@ -1229,10 +1532,10 @@ function handleVisibilityChange() {
 
 .action-buttons {
   display: flex;
-  gap: 10px;
+  gap: 12px;
 }
 
-.create-room-btn, .join-room-btn {
+.create-room-btn, .join-room-btn, .filter-room-btn {
   padding: 0.6rem 1rem;
   font-size: 1rem;
   font-weight: 600;
@@ -1947,7 +2250,146 @@ input:checked + .slider:before {
 .join-room-dialog .create-btn .icon {
   font-style: normal;
   font-weight: bold;
-  margin-right: 0.3rem; /* 图标和文字间距 */
+}
+
+/* 筛选房间按钮样式 */
+.filter-room-btn {
+  background-color: #f8cb66;
+  color: #784a0e;
+}
+
+.filter-room-btn:hover {
+  background-color: #f6ba41;
+}
+
+.filter-room-btn:active {
+  transform: scale(0.98);
+}
+
+/* 筛选房间对话框样式 */
+.filter-room-dialog {
+  background-color: white;
+  border-radius: 12px;
+  width: 450px;
+  max-width: 95%;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.filter-options {
+  margin-top: 8px;
+}
+
+.filter-option {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+
+.filter-option input[type="checkbox"] {
+  margin-right: 8px;
+}
+
+.small-input {
+  width: 50px;
+  padding: 4px 8px;
+  margin: 0 8px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  text-align: center;
+}
+
+.text-input {
+  width: 180px;
+  padding: 6px 10px;
+  margin: 0 8px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+}
+
+/* 聊天大厅按钮样式 */
+.chat-lobby-btn {
+  position: fixed;
+  bottom: 30px;
+  right: 30px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background-color: #f0f2f5;
+  color: #333;
+  border: 1px solid #ddd;
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  transition: transform 0.2s, background-color 0.2s;
+  z-index: 1100;
+}
+
+.chat-lobby-btn:hover {
+  transform: scale(1.05);
+  background-color: #e8e8e8;
+}
+
+.notification-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background-color: #ff4d4f;
+  border: 2px solid white;
+}
+
+/* 商城按钮样式 */
+.shop-btn {
+  position: fixed;
+  bottom: 30px;
+  right: 100px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background-color: #f5f7fa;
+  color: #333;
+  border: 1px solid #ddd;
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  transition: transform 0.2s, background-color 0.2s;
+  z-index: 1100;
+}
+
+.shop-btn:hover {
+  transform: scale(1.05);
+  background-color: #e8e8e8;
+}
+
+/* 浮动按钮容器 */
+.float-buttons {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 0;
+  pointer-events: none;
+  z-index: 1000;
+}
+
+.float-buttons button {
+  pointer-events: auto;
+}
+
+/* 大图标样式 */
+.big-icon {
+  font-size: 24px;
+  line-height: 1;
 }
 
 /* 独立下拉菜单样式 */
@@ -1987,5 +2429,22 @@ input:checked + .slider:before {
 
 .floating-menu .menu-item.disabled:hover {
   background: transparent;
+}
+
+/* 返回控制台按钮样式 */
+.back-admin-btn {
+  background-color: #ffc107;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.back-admin-btn:hover {
+  background-color: #e0a800;
 }
 </style>

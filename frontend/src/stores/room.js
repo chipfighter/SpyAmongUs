@@ -489,8 +489,6 @@ export const useRoomStore = defineStore('room', {
       this.isGodPolling = isPolling;
     },
     setRoleInfo(roleData) {
-      console.log('[RoomStore] 设置角色信息', roleData);
-      
       // 保存角色信息
       this.roles = roleData.roles || {};
       this.currentRole = roleData.role || '';
@@ -500,19 +498,13 @@ export const useRoomStore = defineStore('room', {
       if (this.currentRole === 'civilian') {
         // 这里平民的词语从 civilian_word 中获取
         this.civilianWord = roleData.civilian_word || '';
-        console.log('[RoomStore] 设置平民词语:', this.civilianWord);
       } else if (this.currentRole === 'spy') {
         // 间谍的词语取自 spy_word
         this.spyWord = roleData.spy_word || '';
-        console.log('[RoomStore] 设置卧底词语:', this.spyWord);
       } else if (this.currentRole === 'god') {
         // 上帝知道所有词语
         this.civilianWord = roleData.civilian_word || '';
         this.spyWord = roleData.spy_word || '';
-        console.log('[RoomStore] 设置上帝词语组合:', {
-          civilian: this.civilianWord,
-          spy: this.spyWord
-        });
       }
       
       // 设置游戏状态相关信息
@@ -536,8 +528,6 @@ export const useRoomStore = defineStore('room', {
       
       // 标记游戏已开始
       this.gameStarted = true;
-      
-      console.log('[RoomStore] 角色分配完成，当前roles对象:', this.roles);
     },
     
     // 更新游戏阶段

@@ -71,6 +71,26 @@ class RedisClient:
             logger.error(f"Redis客户端初始化失败: {str(e)}")
             raise
 
+    async def set_with_expiry(self, key: str, value: str, expiry: int = None) -> bool:
+        """设置键值对并设置过期时间
+        
+        Args:
+            key: Redis键
+            value: 值
+            expiry: 过期时间（秒），如果为None则使用默认的SESSION_TTL
+            
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            if expiry is None:
+                expiry = self.SESSION_TTL
+            await self._redis.set(key, value, ex=expiry)
+            return True
+        except Exception as e:
+            logger.error(f"设置键值对失败: {str(e)}")
+            return False
+
     def __getattr__(self, name):
         """动态转发未定义的方法调用到底层Redis客户端"""
         try:

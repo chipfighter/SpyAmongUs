@@ -343,34 +343,37 @@ class UserService:
             }
 
     async def get_user_info(self, user_id: str) -> Dict[str, Any]:
-        """获取用户常用的基础信息（仅从Redis获取，速度快）"""
+        """获取用户常用的基础信息"""
         try:
-            # 直接从Redis缓存中获取
+            # 先从Redis缓存中获取
             user_data = await self.redis_client.get_user(user_id)
-            if user_data:
-                # 提取常用字段
-                info = {
-                    "id": user_id, # ID本身就是传入的
-                    "username": user_data.get("username"),
-                    "avatar_url": user_data.get("avatar_url"),
-                    "status": user_data.get("status", USER_STATUS_ONLINE), # 提供默认值
-                    "current_room": user_data.get("current_room") # 可能为None
-                }
-                return {
-                    "success": True,
-                    "message": "获取成功",
-                    "data": info
-                }
-            else:
-                # Redis中没有缓存，可能用户已登出或从未登录
-                # 不再回退到 MongoDB，保持此函数的高速特性
-                return {
-                    "success": False,
-                    "message": "用户未在线或信息未缓存"
-                }
-
+            if not user_data:
+                # Redis中没有缓存，从MongoDB获取
+                user_data = await self.mongo_client.find_user(user_id)
+                if not user_data:
+                    return {
+                        "success": False,
+                        "message": "用户不存在"
+                    }
+                # 缓存到Redis
+                await self.redis_client.cache_user(user_id, user_data)
+            
+            # 提取常用字段
+            info = {
+                "id": user_id,
+                "username": user_data.get("username"),
+                "avatar_url": user_data.get("avatar_url"),
+                "status": user_data.get("status", USER_STATUS_ONLINE),
+                "current_room": user_data.get("current_room"),
+                "is_admin": user_data.get("is_admin", False)  # 添加管理员权限字段
+            }
+            return {
+                "success": True,
+                "message": "获取成功",
+                "data": info
+            }
         except Exception as e:
-            logger.error(f"从Redis获取用户信息失败: {str(e)}")
+            logger.error(f"获取用户信息失败: {str(e)}")
             return {
                 "success": False,
                 "message": f"获取用户信息时出错: {str(e)}"
@@ -450,4 +453,308 @@ class UserService:
             return {
                 "success": False,
                 "message": f"获取用户画像时出错: {str(e)}"
+            }
+            
+    async def update_game_statistics(self, user_id: str, game_result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        更新用户游戏统计数据
+        
+        Args:
+            user_id: 用户ID
+            game_result: 游戏结果数据，包含:
+                - role: 用户角色 ('civilian' 或 'spy')
+                - win: 是否获胜 (bool)
+        """
+        try:
+            # 从MongoDB获取当前用户统计数据
+            user_data = await self.mongo_client.find_user(user_id)
+            if not user_data:
+                return {
+                    "success": False,
+                    "message": "用户不存在"
+                }
+            
+            # 获取当前统计数据
+            current_stats = user_data.get("statistics", {})
+            if not current_stats:
+                current_stats = UserStatistics().dict()
+            
+            # 提取游戏结果
+            role = game_result.get("role", "civilian")
+            is_win = game_result.get("win", False)
+            
+            # 更新总游戏数据
+            current_stats["total_games"] = current_stats.get("total_games", 0) + 1
+            
+            if is_win:
+                current_stats["win_count"] = current_stats.get("win_count", 0) + 1
+            
+            # 计算总胜率
+            if current_stats["total_games"] > 0:
+                current_stats["win_rate"] = round(current_stats["win_count"] / current_stats["total_games"], 3)
+            
+            # 更新角色特定数据
+            if role == "civilian":
+                current_stats["civilian_games"] = current_stats.get("civilian_games", 0) + 1
+                if is_win:
+                    current_stats["civilian_wins"] = current_stats.get("civilian_wins", 0) + 1
+                
+                # 计算平民胜率
+                if current_stats["civilian_games"] > 0:
+                    current_stats["civilian_win_rate"] = round(
+                        current_stats["civilian_wins"] / current_stats["civilian_games"], 3
+                    )
+                    # 同时更新兼容旧版本的win_rates字典
+                    if "win_rates" not in current_stats:
+                        current_stats["win_rates"] = {}
+                    current_stats["win_rates"]["civilian"] = current_stats["civilian_win_rate"]
+                    
+            elif role == "spy":
+                current_stats["spy_games"] = current_stats.get("spy_games", 0) + 1
+                if is_win:
+                    current_stats["spy_wins"] = current_stats.get("spy_wins", 0) + 1
+                
+                # 计算卧底胜率
+                if current_stats["spy_games"] > 0:
+                    current_stats["spy_win_rate"] = round(
+                        current_stats["spy_wins"] / current_stats["spy_games"], 3
+                    )
+                    # 同时更新兼容旧版本的win_rates字典
+                    if "win_rates" not in current_stats:
+                        current_stats["win_rates"] = {}
+                    current_stats["win_rates"]["spy"] = current_stats["spy_win_rate"]
+            
+            # 更新MongoDB中的统计数据
+            success, message = await self.mongo_client.update_user_statistics(user_id, current_stats)
+            if not success:
+                return {
+                    "success": False,
+                    "message": message
+                }
+            
+            # 如果用户在Redis中有缓存，也更新缓存
+            user_cached = await self.redis_client.user_exists(user_id)
+            if user_cached:
+                # 获取最新的用户数据并更新缓存
+                updated_user_data = await self.mongo_client.find_user(user_id)
+                if updated_user_data:
+                    await self.redis_client.cache_user(user_id, updated_user_data)
+            
+            return {
+                "success": True,
+                "message": "游戏统计数据已更新",
+                "data": current_stats
+            }
+        
+        except Exception as e:
+            logger.error(f"更新用户游戏统计数据失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"更新统计数据时出错: {str(e)}"
+            }
+
+    async def update_user_points(self, user_id: str, points_delta: int) -> Dict[str, Any]:
+        """
+        更新用户积分
+        
+        Args:
+            user_id: 用户ID
+            points_delta: 积分变化值，可正可负
+        """
+        try:
+            # 从MongoDB获取当前用户数据
+            user_data = await self.mongo_client.find_user(user_id)
+            if not user_data:
+                return {
+                    "success": False,
+                    "message": "用户不存在"
+                }
+            
+            # 获取当前积分
+            current_points = user_data.get("points", 0)
+            
+            # 计算新积分（确保不为负）
+            new_points = max(0, current_points + points_delta)
+            
+            # 更新MongoDB中的积分
+            result = await self.mongo_client.db.users.update_one(
+                {"id": user_id},
+                {"$set": {"points": new_points}}
+            )
+            
+            if result.matched_count == 0:
+                return {
+                    "success": False,
+                    "message": "用户不存在"
+                }
+            
+            # 如果用户在Redis中有缓存，也更新缓存
+            user_cached = await self.redis_client.user_exists(user_id)
+            if user_cached:
+                await self.redis_client.hset(f"user:{user_id}", "points", str(new_points))
+            
+            return {
+                "success": True,
+                "message": "用户积分已更新",
+                "data": {
+                    "previous_points": current_points,
+                    "new_points": new_points,
+                    "delta": points_delta
+                }
+            }
+        
+        except Exception as e:
+            logger.error(f"更新用户积分失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"更新积分时出错: {str(e)}"
+            }
+
+    async def toggle_user_admin_status(self, user_id: str, is_admin: bool) -> Dict[str, Any]:
+        """
+        设置或取消用户的管理员状态
+        
+        Args:
+            user_id: 用户ID
+            is_admin: 是否设为管理员
+        """
+        try:
+            # 更新MongoDB中的管理员状态
+            result = await self.mongo_client.db.users.update_one(
+                {"id": user_id},
+                {"$set": {"is_admin": is_admin}}
+            )
+            
+            if result.matched_count == 0:
+                return {
+                    "success": False,
+                    "message": "用户不存在"
+                }
+            
+            # 如果用户在Redis中有缓存，也更新缓存
+            user_cached = await self.redis_client.user_exists(user_id)
+            if user_cached:
+                await self.redis_client.hset(f"user:{user_id}", "is_admin", str(is_admin).lower())
+            
+            action = "设为管理员" if is_admin else "取消管理员权限"
+            return {
+                "success": True,
+                "message": f"用户已{action}",
+                "data": {
+                    "user_id": user_id,
+                    "is_admin": is_admin
+                }
+            }
+        
+        except Exception as e:
+            logger.error(f"更新用户管理员状态失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"更新管理员状态时出错: {str(e)}"
+            }
+
+    async def set_user_mute_status(self, user_id: str, is_muted: bool, mute_until: int = 0) -> Dict[str, Any]:
+        """
+        设置用户禁言状态
+        
+        Args:
+            user_id: 用户ID
+            is_muted: 是否禁言
+            mute_until: 禁言截止时间戳（秒），0表示永久禁言
+        """
+        try:
+            # 如果取消禁言，则将禁言时间重置为0
+            if not is_muted:
+                mute_until = 0
+            
+            # 更新MongoDB中的禁言状态
+            result = await self.mongo_client.db.users.update_one(
+                {"id": user_id},
+                {"$set": {
+                    "is_muted": is_muted,
+                    "mute_until": mute_until
+                }}
+            )
+            
+            if result.matched_count == 0:
+                return {
+                    "success": False,
+                    "message": "用户不存在"
+                }
+            
+            # 如果用户在Redis中有缓存，也更新缓存
+            user_cached = await self.redis_client.user_exists(user_id)
+            if user_cached:
+                await self.redis_client.hset(f"user:{user_id}", "is_muted", str(is_muted).lower())
+                await self.redis_client.hset(f"user:{user_id}", "mute_until", str(mute_until))
+            
+            action = "已禁言" if is_muted else "已解除禁言"
+            return {
+                "success": True,
+                "message": f"用户{action}",
+                "data": {
+                    "user_id": user_id,
+                    "is_muted": is_muted,
+                    "mute_until": mute_until
+                }
+            }
+        
+        except Exception as e:
+            logger.error(f"更新用户禁言状态失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"更新禁言状态时出错: {str(e)}"
+            }
+
+    async def set_user_ban_status(self, user_id: str, is_banned: bool, ban_until: int = 0) -> Dict[str, Any]:
+        """
+        设置用户禁止行为状态
+        
+        Args:
+            user_id: 用户ID
+            is_banned: 是否禁止行为
+            ban_until: 禁止行为截止时间戳（秒），0表示永久禁止
+        """
+        try:
+            # 如果取消禁止行为，则将禁止时间重置为0
+            if not is_banned:
+                ban_until = 0
+            
+            # 更新MongoDB中的禁止行为状态
+            result = await self.mongo_client.db.users.update_one(
+                {"id": user_id},
+                {"$set": {
+                    "is_banned": is_banned,
+                    "ban_until": ban_until
+                }}
+            )
+            
+            if result.matched_count == 0:
+                return {
+                    "success": False,
+                    "message": "用户不存在"
+                }
+            
+            # 如果用户在Redis中有缓存，也更新缓存
+            user_cached = await self.redis_client.user_exists(user_id)
+            if user_cached:
+                await self.redis_client.hset(f"user:{user_id}", "is_banned", str(is_banned).lower())
+                await self.redis_client.hset(f"user:{user_id}", "ban_until", str(ban_until))
+            
+            action = "已禁止行为" if is_banned else "已解除禁止行为"
+            return {
+                "success": True,
+                "message": f"用户{action}",
+                "data": {
+                    "user_id": user_id,
+                    "is_banned": is_banned,
+                    "ban_until": ban_until
+                }
+            }
+        
+        except Exception as e:
+            logger.error(f"更新用户禁止行为状态失败: {str(e)}")
+            return {
+                "success": False,
+                "message": f"更新禁止行为状态时出错: {str(e)}"
             }

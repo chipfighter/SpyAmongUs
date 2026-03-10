@@ -40,6 +40,7 @@
     </div>
     <!-- 只在游戏未开始且不在上帝轮询阶段时显示按钮 -->
     <div class="room-actions" v-if="!gameStarted && !isGodPolling">
+      <!-- 所有用户的返回大厅按钮 -->
       <button 
         class="back-to-lobby-button" 
         @click="$emit('back-to-lobby')"

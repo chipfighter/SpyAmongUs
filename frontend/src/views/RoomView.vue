@@ -831,6 +831,7 @@ export default {
       // 在URL中添加参数，表示只是临时返回大厅
       this.router.push('/lobby?in_room=true&keep_connection=true');
     },
+    
     handleAddFriend(userId) {
       console.log('[RoomView] 添加好友请求:', userId);
       // 暂未实现 - 将来添加好友功能
@@ -1255,8 +1256,6 @@ export default {
     },
     // 处理角色分配事件
     handleRoleAssignedEvent(event) {
-      console.log('[RoomView] 收到角色分配事件:', event.detail);
-      
       // 获取事件详情
       const { role, civilian_word, spy_word, word } = event.detail;
       
@@ -1288,16 +1287,7 @@ export default {
         wordText = '，您可以查看所有角色和词语';
       }
       
-      this.showNotification('success', `您已被分配为${roleText}角色${wordText}！游戏即将开始！`);
-      
-      // 记录状态
-      console.log('[RoomView] 角色分配后状态：', {
-        游戏加载动画: this.showGameLoading,
-        上帝轮询状态: this.roomStore.isGodPolling,
-        游戏已开始: this.gameStarted,
-        当前角色: role,
-        词语信息: role === 'spy' ? (spy_word || word) : (civilian_word || word)
-      });
+      this.showNotification('success', `您已被分配为${roleText}角色${wordText}`);
     },
     // 处理后端广播的当前发言玩家消息
     handleSpeakingTurn(data) {

@@ -88,7 +88,12 @@ async function handleLogin() {
     
     const success = await userStore.login(username.value, password.value)
     if (success) {
-      router.push('/lobby')
+      // 根据是否是管理员决定重定向路径
+      if (userStore.user?.is_admin) {
+        router.push('/admin')
+      } else {
+        router.push('/lobby')
+      }
     }
   } catch (error) {
     proxy.$errorHandler.showError(userStore, error)

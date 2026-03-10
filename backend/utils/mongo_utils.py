@@ -268,3 +268,30 @@ class MongoClient:
             logger.error(f"MongoDB连接检查失败: {str(e)}")
 
         return result
+    
+    async def update_user_statistics(self, user_id: str, statistics_data: dict) -> tuple:
+        """更新用户游戏统计数据"""
+        if self.db is None:
+            return False, "MongoDB连接不可用"
+
+        try:
+            result = await self.db.users.update_one(
+                {"id": user_id},
+                {"$set": {"statistics": statistics_data}}
+            )
+
+            if result.matched_count == 0:
+                logger.warning(f"未找到用户 {user_id}，无法更新统计数据")
+                return False, "用户不存在"
+
+            if result.modified_count > 0:
+                logger.info(f"用户 {user_id} 统计数据已更新")
+                return True, "统计数据已更新"
+            else:
+                logger.info(f"用户 {user_id} 统计数据未变化")
+                return True, "统计数据未变化"
+
+        except Exception as e:
+            error_msg = f"更新用户统计数据时出错: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg

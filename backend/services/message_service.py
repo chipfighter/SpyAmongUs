@@ -190,12 +190,17 @@ class MessageService:
                                 player_id=user_id,
                                 message=message_data
                             )
+                            # 直接返回，避免重复处理
+                            return
                         else:
                             logger.error("无法访问game_service，无法处理遗言")
                             # 退回到普通消息处理
                             await self._handle_normal_message(room_id, message_data, user_id)
                     else:
-                        logger.warning(f"用户 {user_id} 在不是其遗言轮次时尝试发言，忽略消息")
+                        # 对于非遗言玩家的消息，直接当作普通消息处理
+                        # 而不是忽略消息
+                        logger.warning(f"用户 {user_id} 在遗言阶段但非其遗言轮次发言，当作普通消息处理")
+                        await self._handle_normal_message(room_id, message_data, user_id)
                     
                     return
                 elif current_phase == "secret_chat":

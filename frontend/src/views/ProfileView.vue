@@ -148,17 +148,85 @@
             </div>
           </div>
           
-          <!-- 游戏统计区域（占位）-->
+          <!-- 游戏统计区域 -->
           <div class="info-card">
             <div class="card-header">
               <h3 class="card-title">
                 <span class="card-icon">📊</span> 游戏统计
               </h3>
-              <span class="badge">即将推出</span>
             </div>
             
-            <div class="card-body disabled-content">
-              <div class="placeholder-text">游戏统计功能即将上线，敬请期待！</div>
+            <div class="card-body">
+              <!-- 总体数据 -->
+              <div class="stats-section">
+                <h4 class="stats-section-title">总体战绩</h4>
+                <div class="stats-grid">
+                  <div class="stat-item">
+                    <div class="stat-label">总游戏场数</div>
+                    <div class="stat-value">{{ userStats.total_games || 0 }}</div>
+                  </div>
+                  <div class="stat-item">
+                    <div class="stat-label">总胜利场数</div>
+                    <div class="stat-value">{{ userStats.win_count || 0 }}</div>
+                  </div>
+                  <div class="stat-item highlight">
+                    <div class="stat-label">总胜率</div>
+                    <div class="stat-value">{{ formatRate(userStats.win_rate) }}</div>
+                  </div>
+                  <div class="stat-item">
+                    <div class="stat-label">当前积分</div>
+                    <div class="stat-value points">{{ userInfo.points || 0 }}</div>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="stats-divider"></div>
+              
+              <!-- 角色数据 -->
+              <div class="stats-section">
+                <h4 class="stats-section-title">角色战绩</h4>
+                <div class="role-stats">
+                  <!-- 平民数据 -->
+                  <div class="role-card civilian">
+                    <div class="role-icon">👨‍💼</div>
+                    <div class="role-name">平民</div>
+                    <div class="role-stats-grid">
+                      <div class="role-stat">
+                        <div class="role-stat-label">游戏场数</div>
+                        <div class="role-stat-value">{{ userStats.civilian_games || 0 }}</div>
+                      </div>
+                      <div class="role-stat">
+                        <div class="role-stat-label">胜利场数</div>
+                        <div class="role-stat-value">{{ userStats.civilian_wins || 0 }}</div>
+                      </div>
+                      <div class="role-stat highlight">
+                        <div class="role-stat-label">胜率</div>
+                        <div class="role-stat-value">{{ formatRate(userStats.civilian_win_rate) }}</div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <!-- 卧底数据 -->
+                  <div class="role-card spy">
+                    <div class="role-icon">🕵️</div>
+                    <div class="role-name">卧底</div>
+                    <div class="role-stats-grid">
+                      <div class="role-stat">
+                        <div class="role-stat-label">游戏场数</div>
+                        <div class="role-stat-value">{{ userStats.spy_games || 0 }}</div>
+                      </div>
+                      <div class="role-stat">
+                        <div class="role-stat-label">胜利场数</div>
+                        <div class="role-stat-value">{{ userStats.spy_wins || 0 }}</div>
+                      </div>
+                      <div class="role-stat highlight">
+                        <div class="role-stat-label">胜率</div>
+                        <div class="role-stat-value">{{ formatRate(userStats.spy_win_rate) }}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -179,7 +247,24 @@ const userStore = useUserStore()
 const userInfo = ref({
   id: '',
   username: '',
-  createdAt: new Date()
+  createdAt: new Date(),
+  points: 0,
+  is_admin: false,
+  is_muted: false,
+  is_banned: false
+})
+
+// 用户统计数据
+const userStats = ref({
+  total_games: 0,
+  win_count: 0,
+  win_rate: 0,
+  civilian_games: 0,
+  civilian_wins: 0,
+  civilian_win_rate: 0,
+  spy_games: 0,
+  spy_wins: 0,
+  spy_win_rate: 0
 })
 
 // 头像上传相关
@@ -214,6 +299,12 @@ const formatDate = (date) => {
   })
 }
 
+// 格式化胜率显示
+const formatRate = (rate) => {
+  if (!rate && rate !== 0) return '0%'
+  return `${(rate * 100).toFixed(1)}%`
+}
+
 // 计算属性：是否可以更新密码
 const canUpdatePassword = computed(() => {
   return (
@@ -224,13 +315,43 @@ const canUpdatePassword = computed(() => {
 })
 
 // 初始化页面
-onMounted(() => {
+onMounted(async () => {
   // 从store获取用户信息
   if (userStore.user) {
     userInfo.value = {
       id: userStore.user.id,
       username: userStore.user.username,
-      createdAt: userStore.user.createdAt || new Date()
+      createdAt: userStore.user.register_time ? new Date(userStore.user.register_time * 1000) : new Date(),
+      points: userStore.user.points || 0,
+      is_admin: userStore.user.is_admin || false,
+      is_muted: userStore.user.is_muted || false,
+      is_banned: userStore.user.is_banned || false
+    }
+    
+    // 获取统计数据
+    if (userStore.user.statistics) {
+      userStats.value = {
+        ...userStats.value,
+        ...userStore.user.statistics
+      }
+    }
+    
+    // 可选：从后端获取最新统计数据
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/user/${userStore.user.id}/stats`, {
+        headers: {
+          'Authorization': `Bearer ${userStore.accessToken}`
+        }
+      })
+      
+      if (response.ok) {
+        const result = await response.json()
+        if (result.success && result.data) {
+          userStats.value = result.data
+        }
+      }
+    } catch (error) {
+      console.error('获取用户统计数据失败:', error)
     }
   } else {
     // 如果没有用户信息，重定向到登录页
@@ -681,6 +802,122 @@ const updatePassword = async () => {
   padding: 30px 0;
   color: #777;
   font-style: italic;
+}
+
+/* 统计数据样式 */
+.stats-section {
+  margin-bottom: 20px;
+}
+
+.stats-section-title {
+  margin: 0 0 15px 0;
+  font-size: 16px;
+  color: #555;
+  font-weight: 600;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed #eee;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 15px;
+}
+
+.stat-item {
+  padding: 12px;
+  background-color: #f8f9fa;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.stat-item.highlight {
+  background-color: #e3f2fd;
+  border-left: 3px solid #1976d2;
+}
+
+.stat-label {
+  font-size: 13px;
+  color: #666;
+  margin-bottom: 6px;
+}
+
+.stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: #333;
+}
+
+.stat-value.points {
+  color: #f59f00;
+}
+
+.stats-divider {
+  height: 1px;
+  background-color: #eee;
+  margin: 25px 0;
+}
+
+.role-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 15px;
+}
+
+.role-card {
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  padding: 15px;
+  text-align: center;
+  position: relative;
+}
+
+.role-card.civilian {
+  background-color: #e8f5e9;
+  border-left: 3px solid #43a047;
+}
+
+.role-card.spy {
+  background-color: #fff3e0;
+  border-left: 3px solid #ff9800;
+}
+
+.role-icon {
+  font-size: 24px;
+  margin-bottom: 5px;
+}
+
+.role-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 10px;
+}
+
+.role-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.role-stat {
+  text-align: center;
+}
+
+.role-stat.highlight {
+  font-weight: bold;
+}
+
+.role-stat-label {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.role-stat-value {
+  font-size: 16px;
+  color: #333;
+  font-weight: 600;
 }
 
 /* 响应式设计 */

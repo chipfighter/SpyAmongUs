@@ -58,3 +58,5 @@ __pycache__/
 env/
 venv/
 ENV/
+redis_schema.txt
+redis_user_schema.txt

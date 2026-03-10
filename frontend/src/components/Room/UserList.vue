@@ -536,6 +536,12 @@ const calculateShouldShowRole = (userId) => {
 const shouldShowRole = (userId) => {
   // 仅在需要调试问题时才输出日志
   // console.log(`[UserList] shouldShowRole: userId=${userId}, currentUserId=${userStore.user?.id}`);
+  
+  // 如果当前用户是卧底，且被查询的用户ID在卧底队友列表中，显示其角色
+  if (props.currentRole === 'spy' && props.spyTeammates && props.spyTeammates.includes(userId)) {
+    return true;
+  }
+  
   return roleVisibilityMap.value[userId] || false;
 };
 
