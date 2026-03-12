@@ -11,13 +11,10 @@
 
 # Other files
 **/stream_output.py
-backend/tests/
 backend/log.txt
 # backend root temp md files (keep backend/docs/ tracked)
 backend/*.md
 **/*.env
-# Root-level docs/ is drafts only (leading / = root only, won't affect backend/docs/)
-/docs/
 
 # API keys and secrets (precise rules, replacing old **/*.json)
 **/api_keys*.json
